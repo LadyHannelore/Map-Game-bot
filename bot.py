@@ -1232,7 +1232,7 @@ async def create(ctx: commands.Context,
     buildings_sheet.append_row(buildings_row)
 
 
-    new_balance = log_transaction(member.id, user_name, silver, SILVER, "Creation", ctx.author.id, ctx.author.display_name, silver, ctx.message.jump_url)
+    new_balance = log_transaction(member.id, user_name, silver, SILVER, "Creation", ctx.author.id, ctx.author.name, silver, ctx.message.jump_url)
     await ctx.send(f"Created initial player entry for {member.display_name} ({user_name}) with balance: {new_balance}.")
 
 
