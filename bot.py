@@ -18,6 +18,7 @@ import sys, os
 import asyncio
 from math import ceil
 from dotenv import load_dotenv
+import asyncio
 
 # -------------- CONFIGURATION SECTION --------------
 load_dotenv()  # Load variables from .env
@@ -2632,7 +2633,7 @@ async def trade(
 
     await ctx.send(f"Trade completed between {user1.display_name} and {user2.display_name}.")
 
-import asyncio
+
 
 @bot.hybrid_command(name="respawn_month", brief="Clear all resource balances and re-adds them based on each user's production tiles.")
 async def respawn(ctx: commands.Context):
