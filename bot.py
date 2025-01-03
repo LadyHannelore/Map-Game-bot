@@ -577,6 +577,12 @@ def set_user_balance(user_id: int, user_name: str, display_name: str, value: str
     except:
         return None
 
+    # Check if value is numeric
+    try:
+        value = int(value)
+    except ValueError:
+        value = value
+
     sheet.update_cell(user_row, SHEET_COLUMNS[unit], value)
     sheet.update_cell(user_row, SHEET_COLUMNS[DISCORD_NAME], user_name)
     if sheet == silver_sheet:
@@ -1157,9 +1163,9 @@ async def create(ctx: commands.Context,
         culture,            # Culture 
         subculture,         # Subculture 
 
-        xp,                 # XP 
-        silver,             # Silver
-        tiles,              # Tiles
+        int(xp),                 # XP 
+        int(silver),             # Silver
+        int(tiles),              # Tiles
 
         status              # Status
 
@@ -2375,7 +2381,7 @@ async def build(
     building_channel_id = config["building_channel_id"]
     attachment, building_channel, referenced_msg = await check_attachment(ctx, building_channel_id, "building", msg_link)
     has_image = bool(attachment)
-    if not has_image:
+    if not has_image or not building_channel or not referenced_msg:
         return
         
     is_costal = costal.strip().lower() in {"costal", "true", "yes"}
