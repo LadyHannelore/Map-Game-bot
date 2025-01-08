@@ -3641,6 +3641,7 @@ async def union(ctx: commands.Context, leader: discord.Member, member_2: discord
             # Write updated leader row in a single batch update
             update_row_values(sheet_obj, lead_row_idx, updated_lead_data)
 
+    add_user_balance(leader.id, leader.name, leader.display_name, -1, ARMY_CAP)
     
     log_transaction(
         user_id=leader_id_str,
@@ -3652,7 +3653,7 @@ async def union(ctx: commands.Context, leader: discord.Member, member_2: discord
         editor_name=ctx.author.name,
         result=f"Full Union with {player_names}",
         message_link=ctx.message.jump_url,
-    )
+    )   
 
 
     # Send confirmation
