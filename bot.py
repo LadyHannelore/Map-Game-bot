@@ -71,8 +71,8 @@ NAVY = "Navy"
 # War
 ARMY_CAP = "Army cap"
 NAVY_CAP = "Navy cap"
-ARMY_DOCTRINE = "Army coctrine"
-NAVY_DOCTRINE = "Navy coctrine"
+ARMY_DOCTRINE = "Army doctrine"
+NAVY_DOCTRINE = "Navy doctrine"
 TEMP_ARMY = "Temp Army"
 TEMP_NAVY = "Temp Navy"
 
