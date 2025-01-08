@@ -36,7 +36,7 @@ BUILDINGS_SHEET = "Buildings"
 ARTEFACTS_SHEET = "Artefacts"  
 LOG_SHEET = "Log"  
 
-ALLOWED_ROLES = ["Mod"]  # Roles allowed to edit silver
+ALLOWED_ROLES = ["Mod", "Helper", "Admin"]  # Roles allowed to edit silver
 
 # Production Tiles
 CROPS_TILE = "CropsTile"
@@ -1080,7 +1080,6 @@ async def sync(ctx: commands.Context):
     xp="The initial XP for the player (default is 0).",
     silver="The initial silver balance for the player (default is 0).",
     tiles="The initial number of tiles for the player (default is 1).",
-    costal="Whether the nation starts with a coastal city (default is False).",
     status="The player's initial status (default is 'Independent')."
 )
 async def create(ctx: commands.Context,
@@ -1097,15 +1096,13 @@ async def create(ctx: commands.Context,
                  silver: int=0, 
                  tiles: int=1,
 
-                 costal: bool = False,
-
                  status: str="Independent"):
     """
     Create a player entry in the game sheet, initializing their stats across all sheets.\n
     ‎\n
     Usage\n
     -----------\n
-    !create @User "Nation Name" "Capital" [Religion] [Culture] [Subculture] [XP] [Silver] [Tiles] [costal] [Status]\n
+    !create @User "Nation Name" "Capital" [Religion] [Culture] [Subculture] [XP] [Silver] [Tiles] [Status]\n
     ‎\n
     Example\n
     -----------\n
@@ -1131,8 +1128,6 @@ async def create(ctx: commands.Context,
         The initial silver balance for the player (default is 0).
     tiles: int, optional
         The initial number of tiles for the player (default is 1).
-    costal: bool, optional
-        Whether the nation has coastal access (default is True).
     status: str, optional
         The player's initial status (default is "Independent").
     """
@@ -1180,8 +1175,8 @@ async def create(ctx: commands.Context,
         user_name,
         1,          # Army 
         1,          # Army cap
-        int(costal),# Navy
-        int(costal),# Navy cap
+        0,          # Navy
+        0,          # Navy cap
         "",         # Army Doctrine
         "",         # Navy Doctrine
         0,          # Temp Army
