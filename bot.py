@@ -3642,6 +3642,7 @@ async def union(ctx: commands.Context, leader: discord.Member, member_2: discord
             update_row_values(sheet_obj, lead_row_idx, updated_lead_data)
 
     add_user_balance(leader.id, leader.name, leader.display_name, -1, ARMY_CAP)
+    add_user_balance(leader.id, leader.name, leader.display_name, -1, ARMY)
     
     log_transaction(
         user_id=leader_id_str,
