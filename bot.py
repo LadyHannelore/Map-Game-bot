@@ -2696,12 +2696,25 @@ async def respawn(ctx: commands.Context):
     for key, col in RESOURCE_COLUMNS.items():
         batch_reset_column(resource_sheet, key)
 
-    
+    resource_records = resource_sheet.get_all_records()
+
     # 2) For each user, read how many tiles they have from Production sheet,
     #    then set that resource count in Resource sheet to match.
     production_records = production_sheet.get_all_records()
     # We'll create a map {user_id_str: { resource: tile_count, ... }, ...}
     # so we can quickly look up user tile counts
+    if len(resource_records) < 1:
+        await ctx.send("No data found in Resource sheet. Aborting.")
+        return
+
+    # The row index offset: row 2 is record index 0 in get_all_records,
+    # so actual row = i + 2
+    # We'll need the total row count to know how many user rows we have.
+    # We also know which columns are resource columns from RESOURCE_COLUMNS.
+
+    total_rows = len(resource_records) + 1  # +1 for the header row
+    resource_cols = list(RESOURCE_COLUMNS.keys())  # e.g. ["Crops", "Fuel", "Stone", ...]
+    # Note: SHEET_COLUMNS tells us which integer column each resource corresponds to.
  
     production_map = {}
     for record in production_records:
@@ -2710,12 +2723,8 @@ async def respawn(ctx: commands.Context):
             production_map[uid] = {}
         for resource_name, tile_name in resource_to_tile.items():
             # E.g. if resource_name="Crops", tile_name="CropsTile"
-            if tile_name in record:
-                tile_count = record[tile_name]
-                # We assume tile_count is an int. If needed, convert or handle errors
-                if tile_count is None:
-                    tile_count = 0
-                production_map[uid][resource_name] = (tile_count)
+            tile_count = record.get(tile_name, 0) or 0
+            production_map[uid][resource_name] = (tile_count)
     
 
     buildings_records = buildings_sheet.get_all_records()
@@ -2726,42 +2735,111 @@ async def respawn(ctx: commands.Context):
         if uid not in production_map:
             production_map[uid] = {}
 
-        if T1_INDUSTRY in record:
-            tile_count = record[T1_INDUSTRY]
-            if tile_count is None:
-                tile_count = 0
-            production_map[uid][T1_INDUSTRY] = (3*tile_count)
+        t1_count = record.get(T1_INDUSTRY, 0) or 0
+        t2_count = record.get(T2_INDUSTRY, 0) or 0
 
-        if T2_INDUSTRY in record:
-            tile_count = record[T2_INDUSTRY ]
-            if tile_count is None:
-                tile_count = 0
-            production_map[uid][T2_INDUSTRY] = (6*tile_count)
-
+        if t1_count or t2_count:
+            production_map[uid][INDUSTRY] = (3 * t1_count + 6 * t2_count)
         
+    # 3) Construct a 2D array that overwrites all user resource columns
+    #    We'll start by setting all resource columns to 0, then fill them with tile counts if any.
 
-    # Now we have a map of how many of each resource the user should get based on tile count
-    # We'll iterate over the Resource sheet again, row by row, and update from production_map
-    # Also, we can log these changes if needed.
+    # resource_records is a list of dicts, where each dict is a row. The first row is the row after header (#2).
+    # We will create a 2D list (one row per user row, containing only resource columns).
+    # Then do a single "batch_update" for that entire range.
 
-    resource_records = resource_sheet.get_all_records()  # Refresh if needed
+    # Let's define the columns we want: they are from resource_cols, and we find each col index in SHEET_COLUMNS.
+    # We'll fill a matrix: each row is a list of resource values in the same order as resource_cols.
+
+    update_range_start = 2  # row 2 in sheet
+    update_range_end = total_rows  # last row
+    # We'll create update_values, a list of lists. Each sublist is for a single row.
+
+    # Initialize everything to 0
+    row_value_matrix = []
     for i, record in enumerate(resource_records, start=2):
         user_id = record[USER_ID]
-        # Check if we have tile data for them
-        if user_id not in production_map:
-            continue  # This user might not exist in production sheet
+        # build a row of resource columns
+        row_values = []
+        for rname in resource_cols:
+            # default to 0
+            row_values.append(0)
+        row_value_matrix.append(row_values)
 
-        # For each resource_name, find how many tiles the user has:
-        tile_counts_for_user = production_map[user_id]
-        for resource_name, tile_count in tile_counts_for_user.items():
-            # resource_name is like "Crops"
-            # tile_count is how many tiles -> how many resources we want to set
-            col = SHEET_COLUMNS.get(resource_name)
-            if not col:
-                continue
+    # Now fill in from production_map
+    # resource_cols in order => we know the index in that list => that index is for that column
+    resource_col_index_map = {rname: idx for idx, rname in enumerate(resource_cols)}
 
-            # Set the resource in the Resource sheet to tile_count
-            resource_sheet.update_cell(i, col, tile_count)
+    for i, record in enumerate(resource_records, start=2):
+        user_id = record[USER_ID]
+        if user_id in production_map:
+            # we fill row_value_matrix[i-2]
+            tile_counts_for_user = production_map[user_id]
+            for resource_name, tile_count in tile_counts_for_user.items():
+                if resource_name in resource_col_index_map:
+                    col_idx = resource_col_index_map[resource_name]
+                    row_value_matrix[i - 2][col_idx] = tile_count
+    
+    # 4) Create the batch update range
+    # We'll define the A1 range that covers all resource columns from row 2..end
+    # We get the min and max col numbers from the dictionary
+    # but simpler is to just find the col indexes for each resource col in SHEET_COLUMNS
+
+    # Sort resource_cols by their column number to ensure correct left -> right order
+    resource_cols_sorted = sorted(resource_cols, key=lambda r: SHEET_COLUMNS[r])
+    # We'll build the sub-lists in that same sorted order
+    # Actually we have already created row_value_matrix in the order resource_cols
+    # so let's just reorder resource_cols to be consistent with row_value_matrix.
+
+    # But let's do a more robust approach: We define an A1 range from the leftmost resource column to the rightmost
+    # e.g. from row=2..end, col = min -> max
+
+    min_col = min(SHEET_COLUMNS[r] for r in resource_cols)
+    max_col = max(SHEET_COLUMNS[r] for r in resource_cols)
+    start_cell = gspread.utils.rowcol_to_a1(update_range_start, min_col)
+    end_cell = gspread.utils.rowcol_to_a1(update_range_end, max_col)
+    update_range = f"{start_cell}:{end_cell}"
+
+    # Now we need to create the final 2D array in the correct column order
+    # That means for each row in row_value_matrix, we reorder columns from min_col to max_col
+    # However, row_value_matrix is in resource_cols order which might not be sorted, let's fix that.
+
+    # Let's build an index map of col-> resource. Actually simpler is to do a new row in correct order.
+    # We'll define a sorted_rnames = sorted(resource_cols, key=lambda r: SHEET_COLUMNS[r])
+    sorted_rnames = sorted(resource_cols, key=lambda r: SHEET_COLUMNS[r])
+    # We'll also define sorted_col_indices to map from resource_name to the index in sorted_rnames
+    sorted_col_indices = {r: i for i, r in enumerate(sorted_rnames)}
+
+    # We'll build a new matrix row_value_matrix_sorted, same # of rows, with length (max_col - min_col+1)
+    # But we only have resource_cols, let's define the length as len(resource_cols).
+    row_value_matrix_sorted = []
+    for row in row_value_matrix:
+        # row is in the order resource_cols (the original unsorted), so for each sorted_rname, find index in resource_cols
+        new_row = [0]*len(resource_cols)
+        for original_idx, rname in enumerate(resource_cols):
+            # the value is row[original_idx]
+            # we want to place it in new_row[ sorted_col_indices[rname] ]
+            val = row[original_idx]
+            sorted_idx = sorted_col_indices[rname]
+            new_row[sorted_idx] = val
+        row_value_matrix_sorted.append(new_row)
+
+    # Now row_value_matrix_sorted has each row's resource columns in ascending sheet column order.
+
+    # We'll do a batch_update, building a request in the format:
+    # sheet.update( range, matrix_of_values )
+
+    # The number of columns is len(resource_cols). We'll confirm the final range has that same width.
+
+    try:
+        resource_sheet.update(
+            update_range,
+            row_value_matrix_sorted,
+            value_input_option='USER_ENTERED'
+        )
+    except Exception as e:
+        await ctx.send(f"Batch update failed: {str(e)}")
+        return
 
 
     log_transaction(
