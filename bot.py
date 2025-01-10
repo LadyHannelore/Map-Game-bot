@@ -358,7 +358,7 @@ resource_to_tile = {
     LIVESTOCK: LIVESTOCK_TILE,
     MOUNTS: MOUNTS_TILE,
     METAL: METAL_TILE,
-    FIBER: FIBER_TILE
+    FIBER: FIBER_TILE,
 }
 
 NUMBER_OF_SPAWNS = 3
@@ -524,8 +524,6 @@ def get_sheet(unit: unit_type) -> Worksheet:
 
 def batch_reset_column(sheet: gspread.Worksheet, column_name: str):
     # 1) Get the column index from your SHEET_COLUMNS mapping
-    print(column_name)
-    print(SHEET_COLUMNS[column_name])
     col_index = SHEET_COLUMNS[column_name]
 
     # 2) Determine the total rows
@@ -2698,11 +2696,13 @@ async def respawn(ctx: commands.Context):
     for key, col in RESOURCE_COLUMNS.items():
         batch_reset_column(resource_sheet, key)
 
+    print("test1")
     # 2) For each user, read how many tiles they have from Production sheet,
     #    then set that resource count in Resource sheet to match.
     production_records = production_sheet.get_all_records()
     # We'll create a map {user_id_str: { resource: tile_count, ... }, ...}
     # so we can quickly look up user tile counts
+    print("test2")
     production_map = {}
     for record in production_records:
         uid = record[USER_ID]
@@ -2716,8 +2716,10 @@ async def respawn(ctx: commands.Context):
                 if tile_count is None:
                     tile_count = 0
                 production_map[uid][resource_name] = (tile_count)
-    
+    print("test3")
+
     buildings_records = buildings_sheet.get_all_records()
+    print("test4")
     
     for record in buildings_records:
         uid = record[USER_ID]
@@ -2730,11 +2732,12 @@ async def respawn(ctx: commands.Context):
                 tile_count = 0
             production_map[uid][resource_name] = (3*tile_count)
 
-        if T2_INDUSTRY  in record:
+        if T2_INDUSTRY in record:
             tile_count = record[tile_name]
             if tile_count is None:
                 tile_count = 0
             production_map[uid][resource_name] = (6*tile_count)
+    print("test5")
         
 
     # Now we have a map of how many of each resource the user should get based on tile count
@@ -2743,7 +2746,7 @@ async def respawn(ctx: commands.Context):
 
     resource_records = resource_sheet.get_all_records()  # Refresh if needed
     for i, record in enumerate(resource_records, start=2):
-        user_id = record["UserID"]
+        user_id = record[USER_ID]
         # Check if we have tile data for them
         if user_id not in production_map:
             continue  # This user might not exist in production sheet
@@ -2759,6 +2762,7 @@ async def respawn(ctx: commands.Context):
 
             # Set the resource in the Resource sheet to tile_count
             resource_sheet.update_cell(i, col, tile_count)
+    print("test6")
 
     log_transaction(
         user_id="ALL",
@@ -3786,8 +3790,6 @@ async def loan(
 
 
 
-for key, col in RESOURCE_COLUMNS.items():
-    print(key)
-    print(SHEET_COLUMNS[key])
+print(production_sheet.get_all_records())
 bot.run(DISCORD_TOKEN)
 
