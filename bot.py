@@ -2727,13 +2727,13 @@ async def respawn(ctx: commands.Context):
             production_map[uid] = {}
 
         if T1_INDUSTRY in record:
-            tile_count = record[tile_name]
+            tile_count = record[T1_INDUSTRY]
             if tile_count is None:
                 tile_count = 0
             production_map[uid][T1_INDUSTRY] = (3*tile_count)
 
         if T2_INDUSTRY in record:
-            tile_count = record[tile_name]
+            tile_count = record[T2_INDUSTRY ]
             if tile_count is None:
                 tile_count = 0
             production_map[uid][T2_INDUSTRY] = (6*tile_count)
