@@ -856,6 +856,8 @@ async def check_debt(ctx: Context, member: discord.Member, costs: List[Tuple[int
             await send(ctx, "Action canceled.")
             return None
         # If ✅, proceed with deduction
+        else:
+            return True
     else:
         # No resources go negative, just show a confirmation
         await send(ctx, 
