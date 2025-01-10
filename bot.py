@@ -3785,8 +3785,9 @@ async def loan(
     )
 
 
-bot.run(DISCORD_TOKEN)
 
 for key, col in RESOURCE_COLUMNS.items():
     print(key)
     print(SHEET_COLUMNS[key])
+bot.run(DISCORD_TOKEN)
+
