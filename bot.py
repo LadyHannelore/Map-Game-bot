@@ -524,8 +524,10 @@ def get_sheet(unit: unit_type) -> Worksheet:
 
 def batch_reset_column(sheet: gspread.Worksheet, column_name: str):
     # 1) Get the column index from your SHEET_COLUMNS mapping
+    print(column_name)
+    print(SHEET_COLUMNS[column_name])
     col_index = SHEET_COLUMNS[column_name]
-    
+
     # 2) Determine the total rows
     
     num_rows = len(sheet.get_all_values())  # includes header
@@ -3643,6 +3645,7 @@ async def union(ctx: commands.Context, leader: discord.Member, member_2: discord
 
     add_user_balance(leader.id, leader.name, leader.display_name, -1, ARMY_CAP)
     add_user_balance(leader.id, leader.name, leader.display_name, -1, ARMY)
+    set_user_balance(leader.id, leader.name, leader.display_name, leader.id, UNION_LEADER_ID)
     
     log_transaction(
         user_id=leader_id_str,
@@ -3783,3 +3786,7 @@ async def loan(
 
 
 bot.run(DISCORD_TOKEN)
+
+for key, col in RESOURCE_COLUMNS.items():
+    print(key)
+    print(SHEET_COLUMNS[key])
