@@ -3360,6 +3360,10 @@ async def leaderboard(ctx: commands.Context, unit_type: str):
             value = int(value)  # Ensure value is numeric
             
             user = ctx.message.guild.get_member(int(user_id))
+            try:
+                print(user.display_name)
+            except:
+                print("Error occurred fetching user display name")
             user_name = user.display_name
             leaderboard.append((user_id, user_name, value))
     except ValueError:
