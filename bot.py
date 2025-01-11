@@ -3359,7 +3359,7 @@ async def leaderboard(ctx: commands.Context, unit_type: str):
             value = record.get(unit, "0")
             value = int(value)  # Ensure value is numeric
             
-            user = ctx.message.guild.get_member(user_id)
+            user = ctx.message.guild.get_member(int(user_id))
             user_name = user.display_name
             leaderboard.append((user_id, user_name, value))
     except ValueError:
