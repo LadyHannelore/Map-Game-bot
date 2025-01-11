@@ -704,10 +704,10 @@ def building_need(unit: unit_type, variable_cost: str, existing_tier: int = 0, c
         # ------------- CITIES -------------
 
         case "T1City":
-            cost = parse_resource_list(variable_cost)[0], int(coastal)*[(1, "Navy cap")]
+            cost = parse_resource_list(variable_cost)[0], []
         
         case "T2City":
-            cost = [(1,"T1City")] + parse_resource_list(variable_cost)[0], []
+            cost = [(1,"T1City")] + parse_resource_list(variable_cost)[0], int(coastal)*[(1, "Navy cap")]
         
         case "T3City":
             cost = [(1, "T2City")] + parse_resource_list(variable_cost)[0], [(2, "Army cap")]
