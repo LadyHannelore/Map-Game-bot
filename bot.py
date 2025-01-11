@@ -698,7 +698,7 @@ def building_need(unit: unit_type, variable_cost: str, existing_tier: int = 0, c
     if unit not in get_args(buildings):
         return None
 
-    cost = []
+    cost = [], []
     match unit:
 
         # ------------- CITIES -------------
@@ -735,7 +735,7 @@ def building_need(unit: unit_type, variable_cost: str, existing_tier: int = 0, c
 
         case "Monument":
             match existing_tier:
-                case 0: cost = parse_resource_list(variable_cost), []
+                case 0: cost = parse_resource_list(variable_cost)[0], []
                 case 1: cost = [(1, "Monument")] + parse_resource_list(variable_cost)[0], []
                 case 2: cost = [(2, "Monument")] + parse_resource_list(variable_cost)[0], []
 
@@ -2391,9 +2391,9 @@ async def build(
     existing_tier = 0
     try:
         if building_name == MONUMENT:
-            existing_tier = int(get_unit(MONUMENT))
+            existing_tier = int(get_user_balance(member.id, MONUMENT))
         elif building_name == EMPORIUM:
-            existing_tier = int(get_unit(EMPORIUM))
+            existing_tier =int(get_user_balance(member.id, EMPORIUM))
     except:
         existing_tier = 0
 
