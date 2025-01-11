@@ -2215,7 +2215,7 @@ async def changelog(ctx: commands.Context, params: str, action: str = "latest", 
 
     # Filter by user if specified
     if user:
-        records = [r for r in records if r[USER_ID] == str(user.id)]
+        records = [r for r in records if r[USER_ID] == user.id]
 
     # Handle empty records
     if not records:
@@ -3820,7 +3820,7 @@ async def loan(
 
     receiver = get_member(receiver)
     unit = get_unit(unit)
-    if not unit or unit :
+    if not unit:
         return await ctx.send(f"Invalid unit type. Please choose '{ARMY}' or '{NAVY}'.")
     
 
