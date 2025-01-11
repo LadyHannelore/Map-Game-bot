@@ -3827,27 +3827,32 @@ async def loan(
     if not unit:
         return await ctx.send(f"Invalid unit type. Please choose '{ARMY}' or '{NAVY}'.")
     
-
-    unit_cap = f"{unit} cap"
-
-
-    current_troop = get_user_balance(receiver.id, unit)  
+    current_troop = get_user_balance(sender.id, unit)  
     if current_troop is None:
-        return await ctx.send(f"An error occurred when fetching the current {unit} count of {receiver.display_name}.")
-    current_troop = int(current_troop)
+        return await ctx.send(f"An error occurred when fetching the current {unit} count of {sender.display_name}.")
+    if int(current_troop) - count < 0:
+        return await ctx.send(f"{sender.display_name} does not have enough {unit}s to loan (Only {current_troop}).")
 
-    current_temp = get_user_balance(receiver.id, f"Temp {unit}")  
-    if current_temp is None:
-        return await ctx.send(f"An error occurred when fetching the current Temp {unit} count of {receiver.display_name}.")
-    current_temp = int(current_temp)
+    #unit_cap = f"{unit} cap"
 
-    current_cap = get_user_balance(receiver.id, unit_cap) 
-    if current_cap is None:
-        return await ctx.send(f"An error occurred when fetching the current {unit_cap} of {receiver.display_name}.")
-    current_cap = int(current_cap)
 
-    if current_troop + current_temp + count > current_cap:
-        return await ctx.send(f"Deployment not possible. Current {unit}: {current_troop}+{current_temp}/{current_cap} (Would go over cap).")
+    #current_troop = get_user_balance(receiver.id, unit)  
+    #if current_troop is None:
+    #    return await ctx.send(f"An error occurred when fetching the current {unit} count of {receiver.display_name}.")
+    #current_troop = int(current_troop)
+
+    #current_temp = get_user_balance(receiver.id, f"Temp {unit}")  
+    #if current_temp is None:
+    #    return await ctx.send(f"An error occurred when fetching the current Temp {unit} count of {receiver.display_name}.")
+    #current_temp = int(current_temp)
+
+    #current_cap = get_user_balance(receiver.id, unit_cap) 
+    #if current_cap is None:
+    #    return await ctx.send(f"An error occurred when fetching the current {unit_cap} of {receiver.display_name}.")
+    #current_cap = int(current_cap)
+
+    #if current_troop + current_temp + count > current_cap:
+      #  return await ctx.send(f"Deployment not possible. Current {unit}: {current_troop}+{current_temp}/{current_cap} (Would go over cap).")
 
     costs, invalid = parse_resource_list(compensation)
     if invalid:
