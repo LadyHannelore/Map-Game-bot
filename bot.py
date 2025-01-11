@@ -3359,12 +3359,12 @@ async def leaderboard(ctx: commands.Context, unit_type: str):
             value = record.get(unit, "0")
             value = int(value)  # Ensure value is numeric
             
-            user = ctx.message.guild.get_member(int(user_id))
             try:
-                print(user.display_name)
+                user = ctx.message.guild.get_member(int(user_id))
+                user_name = user.display_name
             except:
-                print("Error occurred fetching user display name")
-            user_name = user.display_name
+                user_name = record.get(DISCORD_NAME)
+            
             leaderboard.append((user_id, user_name, value))
     except ValueError:
         return await ctx.send(f"The unit '{unit}' does not have numeric values. Leaderboard cannot be generated.")
