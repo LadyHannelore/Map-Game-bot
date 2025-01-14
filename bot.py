@@ -3195,7 +3195,7 @@ async def deploy(
         return await ctx.send(f"An error occurred when fetching the current {unit_cap} of {member.display_name}.")
     current_cap = int(current_cap)
 
-    if current_troop + current_temp + count > current_cap:
+    if current_troop + count > current_cap:
         return await ctx.send(f"Deployment not possible. Current {unit_short}: {current_troop}+{current_temp}/{current_cap} (Would go over cap).")
 
     costs = troop_costs(unit_short, int(count), use_silver)
