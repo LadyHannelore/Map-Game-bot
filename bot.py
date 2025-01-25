@@ -3236,7 +3236,6 @@ async def arrival(ctx: commands.Context):
             new_val = old_val + delta
             rec[unit] = str(new_val)  # store as string to keep consistent
 
-            print(new_val)
             # For logging, store the final new_val
             final_map[key] = str(new_val)
 
@@ -3265,9 +3264,7 @@ async def arrival(ctx: commands.Context):
         ############################################################################
         # 4) BATCH LOG
         ############################################################################
-        print(changes_map)
-        print("############################################################################")
-        print(final_map)
+
         if all_logs:
             timestamp_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
             editor_id = str(ctx.author.id)
