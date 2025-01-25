@@ -19,6 +19,7 @@ import asyncio
 from math import ceil
 from dotenv import load_dotenv
 import asyncio
+from gspread.exceptions import APIError
 
 # -------------- CONFIGURATION SECTION --------------
 load_dotenv()  # Load variables from .env
@@ -3011,6 +3012,46 @@ async def spawn(
     )
 
 
+def rewrite_sheet(sheet: Worksheet, header_row: List[str], new_records: List[dict]):
+    """
+    Replaces all rows *starting from row 2* in `sheet` (leaving the header row intact)
+    with the given new_records.
+
+    :param sheet: The gspread Worksheet to rewrite.
+    :param header_row: The row_values(1) result (list of column names).
+    :param new_records: A list of dictionaries, each representing a row's data 
+                       keyed by column name from header_row.
+    """
+
+    # 1) Remove all data starting from row 2 until the end:
+    row_count = sheet.row_count
+    if row_count > 1:
+        # Delete everything except the first row (the header)
+        sheet.delete_rows(2, row_count)
+
+    # 2) Build our new data array in list-of-lists format
+    #    The first row is already there (the original header).
+    #    We'll start adding records from row 2 onward.
+    data = []
+    for rec in new_records:
+        row_list = []
+        for col_name in header_row:
+            row_list.append(str(rec.get(col_name, "")))
+        data.append(row_list)
+
+    # 3) If there's no new data, we're done (the sheet has just the header row).
+    if not data:
+        return  # Means we effectively cleared everything but row 1
+
+    # 4) Write the data at row 2
+    # We'll define the range from A2 to 
+    # A2 is row=2, col=1, while the last col is len(header_row)
+    start_cell = gspread.utils.rowcol_to_a1(2, 1)
+    end_cell = gspread.utils.rowcol_to_a1(len(data) + 1, len(header_row))  # +1 because data starts at row 2
+    range_a1 = f"{start_cell}:{end_cell}"
+
+    sheet.update(range_a1, data, value_input_option="USER_ENTERED")
+
 @bot.hybrid_command(name="arrival", brief="Process all army and navy arrivals for the current date.")
 async def arrival(ctx: commands.Context):
     """
@@ -3033,96 +3074,239 @@ async def arrival(ctx: commands.Context):
     if ctx.interaction and not ctx.interaction.response.is_done():
         await ctx.interaction.response.defer()
 
-    # Authorization check
     if not is_authorized(ctx):
         return await send(ctx, "You do not have permission to process arrivals.", ephemeral=True)
 
-    # Get the current date in YYYY-MM-DD format
-    current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    async def do_arrival_logic():
+        # This helper function encapsulates the entire arrival logic,
+        # so we can retry it if there's an APIError.
 
-    # Fetch all data from the deployment sheet
-    records = deployment_sheet.get_all_records()
+        current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    rows_to_delete = []
-    for i, record in enumerate(records):
-        record_date = record.get(DATE)
-        user_id = record.get(USER_ID)
-        unit = get_unit(record.get(TYPE))
-        if not unit:
-            continue
-        amount = int(record.get(AMOUNT, 0))
-        source = record.get(SOURCE, "Arrival")
+        # We'll store (user_id, unit)-> net changes for War sheet
+        changes_map = {}
+        # We'll store logs for a single batch append
+        all_logs = []
 
-        user = bot.get_user(int(user_id))
-        user = get_member(user)
+        ############################################################################
+        # 1) BATCH READ + BATCH 'DELETE' for DEPLOYMENT SHEET
+        ############################################################################
 
-        # If the date is today or earlier, process the row
-        if record_date and record_date <= current_date:
-            # Add the amount to the user's balance
+        deployment_records = deployment_sheet.get_all_records()  # includes headers row in the sense the first record is row #2
+        # The actual column names from row #1:
+        dep_header_row = deployment_sheet.row_values(1)
+        # We'll build a new list of records that we keep
+        new_deployment_records = []
 
-            await add_log(ctx, user, amount, unit, source)
+        for record in deployment_records:
+            record_date = record.get(DATE)
+            user_id_str = record.get(USER_ID)
+            raw_unit = record.get(TYPE)
+            if not raw_unit:
+                # keep the row if we want to preserve empty? we can decide to keep or skip it
+                # We'll assume if raw_unit not present, the row is partial. Keep if we want or skip
+                new_deployment_records.append(record)
+                continue
+
+            unit = get_unit(raw_unit)
+            if not unit:
+                # skip or keep? We'll keep it if we want not to break unknown columns, but let's skip
+                new_deployment_records.append(record)
+                continue
+
+            amount = int(record.get(AMOUNT, 0))
+            source = record.get(SOURCE, "Arrival")
+
+            # If date is before or equal to today => we move them to changes_map, don't keep the row
+            if record_date and record_date <= current_date:
+                # Accumulate
+                key = (user_id_str, unit)
+                changes_map[key] = changes_map.get(key, 0) + amount
+
+                # Prepare logs
+                all_logs.append({
+                    "user_id": user_id_str,
+                    "change_amount": amount,
+                    "unit": unit,
+                    "source": source
+                })
+                # We do NOT add this record to new_deployment_records => effectively "deletes" it
+            else:
+                # We keep the row
+                new_deployment_records.append(record)
+
+        # Now we do a single update that replaces the entire Deployment sheet 
+        # with the new records that remain
+        rewrite_sheet(deployment_sheet, dep_header_row, new_deployment_records)
+
+        # partial message
+        await send(ctx, f"Processed arrivals from Deployment sheet. Kept {len(new_deployment_records)} rows, removed {len(deployment_records)-len(new_deployment_records)}.")
 
 
-            # Mark the row for deletion
-            rows_to_delete.append(i + 2)  # +2 because gspread rows are 1-indexed and the first row is headers
+        ############################################################################
+        # 2) BATCH READ + BATCH 'DELETE' for MERCENARIES SHEET
+        ############################################################################
 
-    # Reverse the rows_to_delete list to avoid shifting issues during deletion
-    rows_to_delete.reverse()
+        merc_records = mercenaries_sheet.get_all_records()
+        merc_header_row = mercenaries_sheet.row_values(1)
+        new_merc_records = []
 
-    # Delete rows from the sheet
-    for row in rows_to_delete:
-        deployment_sheet.delete_rows(row)
+        for record in merc_records:
+            record_date = record.get(DATE)
+            user_id_str = record.get(USER_ID)
+            sender_id_str = record.get(SENDER_ID)
+            raw_unit = record.get(TYPE)
+            if not raw_unit:
+                new_merc_records.append(record)
+                continue
 
-    # Send confirmation
-    await send(
-        ctx,
-        f"Processed arrivals for {len(rows_to_delete)} rows. All troops have been added, and the rows have been removed."
-    )
+            unit = get_unit(raw_unit)
+            if not unit:
+                new_merc_records.append(record)
+                continue
 
-    ########### Mercenaries ###################
+            amount = int(record.get(AMOUNT, 0))
+            # We'll guess a source
+            source = record.get(SOURCE, f"Loaning {unit} from {sender_id_str} to {user_id_str}")
 
-     # Fetch all data from the mercenaries sheet
-    records = mercenaries_sheet.get_all_records()
+            if record_date and record_date <= current_date:
+                # user_id_str gets +amount
+                key_receiver = (user_id_str, unit)
+                changes_map[key_receiver] = changes_map.get(key_receiver, 0) + amount
+                # sender_id_str gets -amount
+                key_sender = (sender_id_str, unit)
+                changes_map[key_sender] = changes_map.get(key_sender, 0) - amount
 
-    rows_to_delete = []
-    for i, record in enumerate(records):
-        record_date = record.get(DATE)
-        user_id = record.get(USER_ID)
-        sender_id = record.get(SENDER_ID)
-        unit = get_unit(record.get(TYPE))
-        if not unit:
-            continue
-        amount = int(record.get(AMOUNT, 0))
-        receiver = get_member(bot.get_user(int(user_id)))
-        sender = get_member(bot.get_user(int(sender_id)))
+                # logs
+                all_logs.append({
+                    "user_id": user_id_str,
+                    "change_amount": amount,
+                    "unit": unit,
+                    "source": source
+                })
+                all_logs.append({
+                    "user_id": sender_id_str,
+                    "change_amount": -amount,
+                    "unit": unit,
+                    "source": source
+                })
+                # do not keep row
+            else:
+                new_merc_records.append(record)
 
-        source = record.get(SOURCE, f"Loaning {unit} from {sender.name} to {receiver.name}")
+        # rewrite merc sheet
+        rewrite_sheet(mercenaries_sheet, merc_header_row, new_merc_records)
+
+        await send(ctx, f"Processed arrivals from Mercenaries sheet. Kept {len(new_merc_records)} rows, removed {len(merc_records)-len(new_merc_records)}.")
+
+        ############################################################################
+        # 3) BATCH UPDATE WAR SHEET
+        ############################################################################
+
+        war_records = war_sheet.get_all_records()
+        war_header = war_sheet.row_values(1)
+        # build user-> row index
+        user_row_map = {}
+        for i, wrec in enumerate(war_records):
+            uid = wrec.get(USER_ID)
+            if uid:
+                user_row_map[uid] = i+2  # actual row number
+
+        # build row_updates: row -> {unit -> new_value}
+        row_updates = {}
+
+        # read existing values, add changes
+        # we'll do them in memory, then do a single batch update
+        # or we can do the "rebuild entire war sheet"? but let's do partial. We'll do partial for now
+
+        # read record into a local data structure
+        # wrec is war_records[i], row i => sheet row i+2
+        # we do one pass to transform to dictionary with (uid, col_name) => value
+        # but let's do a quick approach: we only have changes for certain (uid, unit).
+        # We'll do a dictionary of row_data => war_records i. Then we'll do an in-place update
+
+        # let's store a python array of dicts in war_records. We'll mutate them
+        for (uid, unit), delta in changes_map.items():
+            if uid not in user_row_map:
+                # skip if user not found
+                continue
+            row_idx = user_row_map[uid] - 2
+            rec = war_records[row_idx]  # local dict
+            old_val_str = rec.get(unit, "0")
+            try:
+                old_val = int(old_val_str)
+            except ValueError:
+                old_val = 0
+            new_val = old_val + delta
+            rec[unit] = str(new_val)  # store as string to keep consistent
+
+        # now we do a single rewrite approach or a partial batch update. 
+        # let's do partial batch update to only changed cells
+        # build requests
+        requests = []
+        for (uid, unit), delta in changes_map.items():
+            if uid not in user_row_map:
+                continue
+            row_number = user_row_map[uid]
+            col_index = SHEET_COLUMNS.get(unit)
+            if not col_index:
+                continue
+            # get final value from war_records
+            row_idx = row_number - 2
+            final_str_val = war_records[row_idx].get(unit, "0")
+            a1 = gspread.utils.rowcol_to_a1(row_number, col_index)
+            requests.append({
+                "range": a1,
+                "values": [[final_str_val]]
+            })
+        if requests:
+            war_sheet.batch_update(requests, value_input_option="USER_ENTERED")
+
+        ############################################################################
+        # 4) BATCH LOG
+        ############################################################################
+        if all_logs:
+            timestamp_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            editor_id = str(ctx.author.id)
+            editor_name = ctx.author.name
+            link = ctx.message.jump_url if ctx.message else ""
+
+            log_rows = []
+            for entry in all_logs:
+                user_id_str = entry["user_id"]
+                change_amount = entry["change_amount"]
+                unit_name = entry["unit"]
+                source = entry["source"]
+                row = [
+                    user_id_str,
+                    "",  # skip user_name or do partial
+                    timestamp_str,
+                    str(change_amount),
+                    unit_name,
+                    source,
+                    editor_id,
+                    editor_name,
+                    "BATCH",
+                    link
+                ]
+                log_rows.append(row)
+
+            log_sheet.append_rows(log_rows, value_input_option="USER_ENTERED")
+
+        await send(ctx, "Arrivals processed (Deployment + Mercenaries) with batch 'deletions' and war sheet updates in one go!")
 
 
-
-        # If the date is today or earlier, process the row
-        if record_date and record_date <= current_date:
-            # Add the amount to the user's balance
-
-            await add_log(ctx, receiver, amount, unit, source)
-            await add_log(ctx, sender, -amount, unit, source)
-    
-
-            # Mark the row for deletion
-            rows_to_delete.append(i + 2)  # +2 because gspread rows are 1-indexed and the first row is headers
-
-    # Reverse the rows_to_delete list to avoid shifting issues during deletion
-    rows_to_delete.reverse()
-
-    # Delete rows from the sheet
-    for row in rows_to_delete:
-        deployment_sheet.delete_rows(row)
-
-    # Send confirmation
-    await send(
-        ctx,
-        f"Processed arrivals for {len(rows_to_delete)} rows. All troops have been added, and the rows have been removed."
-    )
+    # ================== TRY LOGIC WITH RETRY ==================
+    try:
+        await do_arrival_logic()
+    except gspread.exceptions.APIError as e:
+        # if there's an APIError, wait 61 seconds and retry once
+        await send(ctx, f"APIError encountered: {e}\nWaiting 61 seconds, then retrying...")
+        await asyncio.sleep(61)
+        try:
+            await do_arrival_logic()
+        except gspread.exceptions.APIError as e2:
+            await send(ctx, f"APIError again on second attempt, stopping. Error: {e2}")
 
 @bot.hybrid_command(name="deploy", brief="Deploy an Army or Navy, arriving in 2 weeks.")
 @app_commands.describe(
