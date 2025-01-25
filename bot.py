@@ -3202,7 +3202,7 @@ async def arrival(ctx: commands.Context):
         # build user-> row index
         user_row_map = {}
         for i, wrec in enumerate(war_records):
-            uid = wrec.get(USER_ID)
+            uid = str(wrec.get(USER_ID))
             if uid:
                 user_row_map[uid] = i+2  # actual row number
 
@@ -3236,6 +3236,7 @@ async def arrival(ctx: commands.Context):
             new_val = old_val + delta
             rec[unit] = str(new_val)  # store as string to keep consistent
 
+            print(new_val)
             # For logging, store the final new_val
             final_map[key] = str(new_val)
 
