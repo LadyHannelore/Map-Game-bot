@@ -718,7 +718,7 @@ def building_need(unit: unit_type, variable_cost: str, existing_tier: int = 0, c
             cost = parse_resource_list(variable_cost)[0], [(3, INDUSTRY)]
         
         case "T2Industry":
-            cost = [(1, "T1Industry")] + parse_resource_list(variable_cost)[0], [(6, INDUSTRY)]
+            cost = [(1, "T1Industry")] + parse_resource_list(variable_cost)[0], [(3, INDUSTRY)]
 
         # ------------- FORTS -------------
 
@@ -2373,13 +2373,6 @@ async def build(
 
     if not is_authorized(ctx):
         return await ctx.send("You do not have permission to build structures.")
-
-    # Ensure the expansion channel is configured
-    building_channel_id = config["building_channel_id"]
-    attachment, building_channel, referenced_msg = await check_attachment(ctx, building_channel_id, "building", msg_link)
-    has_image = bool(attachment)
-    if not has_image or not building_channel or not referenced_msg:
-        return
         
     is_costal = costal.strip().lower() in {"costal", "true", "yes"}
 
@@ -2387,6 +2380,23 @@ async def build(
     building_name = get_unit(building_name)
     if not building_name:
         return await ctx.send(f"Building type '{building_name}' is invalid or not implemented.")
+
+
+    # Ensure the logging channels are configured
+    if building_name == T1_INDUSTRY or T2_INDUSTRY:
+        channel_id = config["resource_channel_id"]
+        attachment, channel, referenced_msg = await check_attachment(ctx, channel_id, "resource", msg_link)
+        has_image = bool(attachment)
+        if not has_image or not channel or not referenced_msg:
+            return
+    else:
+        channel_id = config["building_channel_id"]
+        attachment, channel, referenced_msg = await check_attachment(ctx, channel_id, "building", msg_link)
+        has_image = bool(attachment)
+        if not has_image or not channel or not referenced_msg:
+            return
+
+
 
     existing_tier = 0
     try:
@@ -2441,8 +2451,8 @@ async def build(
     if has_image:
         embed.set_image(url=attachment.url)
 
-    await building_channel.send(embed=embed)
-    await ctx.send(f"Building of {building_name} in {tile_name} by {member.display_name} has been successfully posted in {building_channel.mention}.")
+    await channel.send(embed=embed)
+    await ctx.send(f"Building of {building_name} in {tile_name} by {member.display_name} has been successfully posted in {channel.mention}.")
 
     await ctx.send(
         f"Successfully built {building_name} for {member.mention}, "
