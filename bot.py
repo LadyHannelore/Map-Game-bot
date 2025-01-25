@@ -3221,7 +3221,8 @@ async def arrival(ctx: commands.Context):
         # We'll do a dictionary of row_data => war_records i. Then we'll do an in-place update
 
         # let's store a python array of dicts in war_records. We'll mutate them
-        for (uid, unit), delta in changes_map.items():
+        for key, delta in changes_map.items():
+            uid, unit = key
             if uid not in user_row_map:
                 # skip if user not found
                 continue
@@ -3236,7 +3237,7 @@ async def arrival(ctx: commands.Context):
             rec[unit] = str(new_val)  # store as string to keep consistent
 
             # For logging, store the final new_val
-            final_map[(uid, unit)] = str(new_val)
+            final_map[key] = str(new_val)
 
         # now we do a single rewrite approach or a partial batch update. 
         # let's do partial batch update to only changed cells
