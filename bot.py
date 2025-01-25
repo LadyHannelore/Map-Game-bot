@@ -3011,46 +3011,51 @@ async def spawn(
         f"Added **{resource_amount} {resource_name}** and **{tile_amount} {tile_name}** to {member.mention}.\n"
     )
 
-
 def rewrite_sheet(sheet: Worksheet, header_row: List[str], new_records: List[dict]):
     """
-    Replaces all rows *starting from row 2* in `sheet` (leaving the header row intact)
-    with the given new_records.
+    Replaces all rows (starting from row 2) in `sheet` with the given `new_records`,
+    preserving the original header row. Uses sheet resizing instead of mass row-deletions
+    to avoid Google Sheets 'cannot delete all non-frozen rows' errors.
 
     :param sheet: The gspread Worksheet to rewrite.
-    :param header_row: The row_values(1) result (list of column names).
-    :param new_records: A list of dictionaries, each representing a row's data 
-                       keyed by column name from header_row.
+    :param header_row: The list of column names in row 1 (from e.g. sheet.row_values(1)).
+    :param new_records: A list of dictionaries. Each dict represents one row of data,
+                        keyed by column name in header_row.
     """
 
-    # 1) Remove all data starting from row 2 until the end:
-    row_count = sheet.row_count
-    if row_count > 1:
-        # Delete everything except the first row (the header)
-        sheet.delete_rows(2, row_count)
+    # Step 1) Resize the sheet to a single row (row 1), effectively clearing everything below it
+    # but leaving the header row intact. 
+    # We'll keep the same number of columns to preserve format if needed.
+    current_col_count = sheet.col_count
+    if current_col_count < len(header_row):
+        current_col_count = len(header_row)
+    sheet.resize(rows=1, cols=current_col_count)
 
-    # 2) Build our new data array in list-of-lists format
-    #    The first row is already there (the original header).
-    #    We'll start adding records from row 2 onward.
-    data = []
+    # Step 2) If there are no new records, we're done (the sheet now has just row 1).
+    if not new_records:
+        return
+
+    # Step 3) We now expand to fit exactly len(new_records) + 1 rows
+    final_row_count = len(new_records) + 1  # plus the header
+    sheet.resize(rows=final_row_count, cols=current_col_count)
+
+    # Step 4) Build the 2D list of new record data in the same order as header_row
+    data_matrix = []
     for rec in new_records:
         row_list = []
         for col_name in header_row:
+            # Convert to string to avoid type issues
             row_list.append(str(rec.get(col_name, "")))
-        data.append(row_list)
+        data_matrix.append(row_list)
 
-    # 3) If there's no new data, we're done (the sheet has just the header row).
-    if not data:
-        return  # Means we effectively cleared everything but row 1
-
-    # 4) Write the data at row 2
-    # We'll define the range from A2 to 
-    # A2 is row=2, col=1, while the last col is len(header_row)
+    # Step 5) Write the new records at row 2..N
+    # Range from A2 to some row and col. 
     start_cell = gspread.utils.rowcol_to_a1(2, 1)
-    end_cell = gspread.utils.rowcol_to_a1(len(data) + 1, len(header_row))  # +1 because data starts at row 2
+    end_cell = gspread.utils.rowcol_to_a1(final_row_count, len(header_row))
     range_a1 = f"{start_cell}:{end_cell}"
 
-    sheet.update(range_a1, data, value_input_option="USER_ENTERED")
+    sheet.update(range_a1, data_matrix, value_input_option="USER_ENTERED")
+
 
 @bot.hybrid_command(name="arrival", brief="Process all army and navy arrivals for the current date.")
 async def arrival(ctx: commands.Context):
