@@ -3088,7 +3088,7 @@ async def arrival(ctx: commands.Context):
 
         for record in deployment_records:
             record_date = record.get(DATE)
-            user_id_str = record.get(USER_ID)
+            user_id_str = str(record.get(USER_ID))
             user_name = record.get(DISCORD_NAME)
             raw_unit = record.get(TYPE)
             if not raw_unit:
@@ -3143,9 +3143,9 @@ async def arrival(ctx: commands.Context):
 
         for record in merc_records:
             record_date = record.get(DATE)
-            user_id_str = record.get(USER_ID)
+            user_id_str = str(record.get(USER_ID))
             user_name = record.get(DISCORD_NAME)
-            sender_id_str = record.get(SENDER_ID)
+            sender_id_str = str(record.get(SENDER_ID))
             sender_name = record.get(SENDER_NAME)
             raw_unit = record.get(TYPE)
             if not raw_unit:
