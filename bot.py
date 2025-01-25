@@ -3222,7 +3222,6 @@ async def arrival(ctx: commands.Context):
 
         # let's store a python array of dicts in war_records. We'll mutate them
         for (uid, unit), delta in changes_map.items():
-            uid = str(uid)
             if uid not in user_row_map:
                 # skip if user not found
                 continue
