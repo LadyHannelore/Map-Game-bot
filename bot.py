@@ -3013,48 +3013,31 @@ async def spawn(
 
 def rewrite_sheet(sheet: Worksheet, header_row: List[str], new_records: List[dict]):
     """
-    Replaces all rows (starting from row 2) in `sheet` with the given `new_records`,
-    preserving the original header row. Uses sheet resizing instead of mass row-deletions
-    to avoid Google Sheets 'cannot delete all non-frozen rows' errors.
+    Replaces the entire contents of `sheet` with the given header row + new_records.
 
-    :param sheet: The gspread Worksheet to rewrite.
-    :param header_row: The list of column names in row 1 (from e.g. sheet.row_values(1)).
-    :param new_records: A list of dictionaries. Each dict represents one row of data,
-                        keyed by column name in header_row.
+    :param sheet: The gspread Worksheet to rewrite
+    :param header_row: The row_values(1) result (list of column names)
+    :param new_records: a list of dictionaries, each representing a row's data
     """
 
-    # Step 1) Resize the sheet to a single row (row 1), effectively clearing everything below it
-    # but leaving the header row intact. 
-    # We'll keep the same number of columns to preserve format if needed.
-    current_col_count = sheet.col_count
-    if current_col_count < len(header_row):
-        current_col_count = len(header_row)
-    sheet.resize(rows=1, cols=current_col_count)
+    # We do a single batch update approach:
+    # 1) Clear the sheet, or we can just resize to 1 row
+    sheet.clear()
 
-    # Step 2) If there are no new records, we're done (the sheet now has just row 1).
-    if not new_records:
-        return
+    # 2) Re-append the header
+    # Build data: the first row is header_row
+    data = [header_row]
 
-    # Step 3) We now expand to fit exactly len(new_records) + 1 rows
-    final_row_count = len(new_records) + 1  # plus the header
-    sheet.resize(rows=final_row_count, cols=current_col_count)
-
-    # Step 4) Build the 2D list of new record data in the same order as header_row
-    data_matrix = []
+    # 3) For each record in new_records, we convert from dict to list matching header
     for rec in new_records:
         row_list = []
         for col_name in header_row:
-            # Convert to string to avoid type issues
             row_list.append(str(rec.get(col_name, "")))
-        data_matrix.append(row_list)
+        data.append(row_list)
 
-    # Step 5) Write the new records at row 2..N
-    # Range from A2 to some row and col. 
-    start_cell = gspread.utils.rowcol_to_a1(2, 1)
-    end_cell = gspread.utils.rowcol_to_a1(final_row_count, len(header_row))
-    range_a1 = f"{start_cell}:{end_cell}"
-
-    sheet.update(range_a1, data_matrix, value_input_option="USER_ENTERED")
+    # 4) do a single update
+    # The range can be from A1 downward or we can just use update(data, "A1")
+    sheet.update("A1", data, value_input_option="USER_ENTERED")
 
 
 @bot.hybrid_command(name="arrival", brief="Process all army and navy arrivals for the current date.")
