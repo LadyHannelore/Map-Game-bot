@@ -3089,6 +3089,7 @@ async def arrival(ctx: commands.Context):
         for record in deployment_records:
             record_date = record.get(DATE)
             user_id_str = record.get(USER_ID)
+            user_name = record.get(DISCORD_NAME)
             raw_unit = record.get(TYPE)
             if not raw_unit:
                 # keep the row if we want to preserve empty? we can decide to keep or skip it
@@ -3114,6 +3115,7 @@ async def arrival(ctx: commands.Context):
                 # Prepare logs
                 all_logs.append({
                     "user_id": user_id_str,
+                    "user_name": user_name,
                     "change_amount": amount,
                     "unit": unit,
                     "source": source
@@ -3142,7 +3144,9 @@ async def arrival(ctx: commands.Context):
         for record in merc_records:
             record_date = record.get(DATE)
             user_id_str = record.get(USER_ID)
+            user_name = record.get(DISCORD_NAME)
             sender_id_str = record.get(SENDER_ID)
+            sender_name = record.get(SENDER_NAME)
             raw_unit = record.get(TYPE)
             if not raw_unit:
                 new_merc_records.append(record)
@@ -3168,12 +3172,14 @@ async def arrival(ctx: commands.Context):
                 # logs
                 all_logs.append({
                     "user_id": user_id_str,
+                    "user_name": user_name,
                     "change_amount": amount,
                     "unit": unit,
                     "source": source
                 })
                 all_logs.append({
                     "user_id": sender_id_str,
+                    "user_name": sender_name,
                     "change_amount": -amount,
                     "unit": unit,
                     "source": source
@@ -3202,6 +3208,7 @@ async def arrival(ctx: commands.Context):
 
         # build row_updates: row -> {unit -> new_value}
         row_updates = {}
+        final_map = {}  # (user_id, unit) -> final str value
 
         # read existing values, add changes
         # we'll do them in memory, then do a single batch update
@@ -3215,6 +3222,7 @@ async def arrival(ctx: commands.Context):
 
         # let's store a python array of dicts in war_records. We'll mutate them
         for (uid, unit), delta in changes_map.items():
+            uid = str(uid)
             if uid not in user_row_map:
                 # skip if user not found
                 continue
@@ -3227,6 +3235,9 @@ async def arrival(ctx: commands.Context):
                 old_val = 0
             new_val = old_val + delta
             rec[unit] = str(new_val)  # store as string to keep consistent
+
+            # For logging, store the final new_val
+            final_map[(uid, unit)] = str(new_val)
 
         # now we do a single rewrite approach or a partial batch update. 
         # let's do partial batch update to only changed cells
@@ -3262,19 +3273,22 @@ async def arrival(ctx: commands.Context):
             log_rows = []
             for entry in all_logs:
                 user_id_str = entry["user_id"]
+                user_name = entry["user_name"]
                 change_amount = entry["change_amount"]
                 unit_name = entry["unit"]
                 source = entry["source"]
+                # Retrieve final new_val from final_map
+                final_val = final_map.get((user_id_str, unit_name), "??")
                 row = [
-                    user_id_str,
-                    "",  # skip user_name or do partial
+                    str(user_id_str),
+                    user_name,  
                     timestamp_str,
                     str(change_amount),
                     unit_name,
                     source,
                     editor_id,
                     editor_name,
-                    "BATCH",
+                    final_val,
                     link
                 ]
                 log_rows.append(row)
