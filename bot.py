@@ -4697,7 +4697,7 @@ async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: 
 
     for (u_id, qty) in user_amounts:
         user_id_str = str(u_id)
-        user = bot.get_user(u_id)
+        user = bot.get_user(int(u_id))
         if user_id_str not in user_map:
             # user not found in sheet
             await ctx.send(f"{user}({u_id}) not found in the sheet, skipping.")
