@@ -308,10 +308,10 @@ SHEET_COLUMNS = {
     T1_INDUSTRY: 6,
     T2_INDUSTRY: 7,
     T3_INDUSTRY: 8,
-    T1_FORT: 8,
-    T2_FORT: 9,
-    T3_FORT: 10,
-    MONUMENT: 11,
+    T1_FORT: 9,
+    T2_FORT: 10,
+    T3_FORT: 11,
+    MONUMENT: 12,
 
     # -------------- ARTIFACT SHEET --------------
     ARTEFACT: 3,
@@ -1550,13 +1550,13 @@ async def add(ctx: Context, member: discord.Member, amount: int, unit_str: str, 
 @app_commands.describe(
     member="The user to whom these resources will be added.",
     resources='A comma-separated list of resources (e.g., "100 Silver, -2 Crops").',
-    log_msg="An optional message/source for logging the addition (e.g., 'Quest Reward')."
+    source="An optional message/source for logging the addition (e.g., 'Quest Reward')."
 )
 async def add_all(
     ctx: commands.Context, 
     member: discord.Member, 
     resources: str, 
-    log_msg: str = "No source provided"
+    source: str = "No source provided"
 ):
     """
     Add multiple resources to a single player's balance in one minimal sheet update.
@@ -1575,7 +1575,7 @@ async def add_all(
         The user who will receive these resources.
     resources: str
         A comma-separated list of resource additions (e.g., "100 Silver, -2 Crops").
-    log_msg: str, optional
+    source: str, optional
         A short message or reason for the transaction, default is "No source provided".
     """
     if ctx.interaction and not ctx.interaction.response.is_done():
@@ -1599,7 +1599,7 @@ async def add_all(
     resource_list = group_costs(resource_list)
 
 
-    confirm = batch_add_all(ctx, member, resource_list, log_msg)
+    confirm = batch_add_all(ctx, member, resource_list, source)
     if not confirm:
         return await ctx.send("User not found.")
     old, final = confirm
