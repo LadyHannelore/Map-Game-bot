@@ -12,7 +12,7 @@ from gspread.worksheet import Worksheet
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timezone, timedelta
 
-from typing import Literal, Union, List, get_args, Dict, Tuple, Optional, Any
+from typing import Literal, Union, List, get_args, Dict, Tuple, Optional, Any, Callable
 from collections import Counter
 import sys, os
 import asyncio
@@ -20,6 +20,7 @@ from math import ceil
 from dotenv import load_dotenv
 import asyncio
 from gspread.exceptions import APIError
+import random
 
 # -------------- CONFIGURATION SECTION --------------
 load_dotenv()  # Load variables from .env
@@ -76,6 +77,8 @@ ARMY_DOCTRINE = "Army doctrine"
 NAVY_DOCTRINE = "Navy doctrine"
 TEMP_ARMY = "Temp Army"
 TEMP_NAVY = "Temp Navy"
+CAPITAL_NAVY = "Capital Navy"
+GENERAL = "General"
 
 # Mix
 NATION_NAME = "Nation name"
@@ -98,11 +101,12 @@ T2_CITY = "T2City"
 T3_CITY = "T3City"
 T1_INDUSTRY = "T1Industry"
 T2_INDUSTRY = "T2Industry"
+T3_INDUSTRY = "T3Industry"
 T1_FORT = "T1Fort"
 T2_FORT = "T2Fort"
 T3_FORT = "T3Fort"
 MONUMENT = "Monument"
-EMPORIUM = "Emporium"
+#EMPORIUM = "Emporium"
 
 # Artefacts
 ARTEFACT = "Artefact"
@@ -168,7 +172,9 @@ war = Literal[
     ARMY_DOCTRINE,
     NAVY_DOCTRINE,
     TEMP_ARMY,
-    TEMP_NAVY
+    TEMP_NAVY,
+    CAPITAL_NAVY,
+    GENERAL
 ]
 
 mix = Literal[
@@ -193,19 +199,17 @@ buildings = Literal[
     T3_CITY,
     T1_INDUSTRY,
     T2_INDUSTRY,
+    T3_INDUSTRY,
     T1_FORT,
     T2_FORT,
     T3_FORT,
     MONUMENT,
-    EMPORIUM
-]
-
-artefacts = Literal[
-    ARTEFACT
+    #EMPORIUM
 ]
 
 
-unit_type = Union[resources, production_tiles, mix, war, buildings, artefacts]
+
+unit_type = Union[resources, production_tiles, mix, war, buildings]
 
 RESOURCE_COLUMNS = {
     CROPS: 3,
@@ -256,6 +260,9 @@ SHEET_COLUMNS = {
     NAVY_DOCTRINE: 8,
     TEMP_ARMY: 9,
     TEMP_NAVY: 10,
+    CAPITAL_NAVY: 11,
+    GENERAL: 12,
+
 
     # -------------- DEPLOYMENT SHEET --------------
 
@@ -300,11 +307,11 @@ SHEET_COLUMNS = {
     T3_CITY: 5,
     T1_INDUSTRY: 6,
     T2_INDUSTRY: 7,
+    T3_INDUSTRY: 8,
     T1_FORT: 8,
     T2_FORT: 9,
     T3_FORT: 10,
     MONUMENT: 11,
-    EMPORIUM: 12,
 
     # -------------- ARTIFACT SHEET --------------
     ARTEFACT: 3,
@@ -520,7 +527,7 @@ def get_sheet(unit: unit_type) -> Worksheet:
     if unit in get_args(buildings): return buildings_sheet
 
     if unit in get_args(war): return war_sheet
-    if unit in get_args(artefacts): return artefacts_sheet
+    #if unit in get_args(artefacts): return artefacts_sheet
     else: return None
 
 def batch_reset_column(sheet: gspread.Worksheet, column_name: str):
@@ -656,7 +663,7 @@ def is_authorized(ctx: Context) -> bool:
 
 def show_log(entry: Dict[str, int | float | str], all_params: bool):
     if all_params:
-        line = (f"**User:** {entry['Discord name']} | **Change:** {entry['Amount']} {entry['Type']} | "
+        line = (f"- **User:** {entry['Discord name']} | **Change:** {entry['Amount']} {entry['Type']} | "
                 f"**Source:** {entry['Source']} | **Editor:** {entry['Editor Discord name']} | "
                 f"**Time:** {entry['Date']} | **New Balance:** {entry['Result']} {entry['Type']}")
     else:
@@ -721,6 +728,9 @@ def building_need(unit: unit_type, variable_cost: str, existing_tier: int = 0, c
         case "T2Industry":
             cost = [(1, "T1Industry")] + parse_resource_list(variable_cost)[0], [(3, INDUSTRY)]
 
+        case "T3Industry":
+            cost = [(1, "T2Industry")] + parse_resource_list(variable_cost)[0], [(3, INDUSTRY)]
+
         # ------------- FORTS -------------
 
         case "T1Fort":
@@ -742,10 +752,10 @@ def building_need(unit: unit_type, variable_cost: str, existing_tier: int = 0, c
 
          # ------------- EMPORIUM -------------
 
-        case "Emporium":
-            match existing_tier:
-                case 0: cost = parse_resource_list(variable_cost)[0], []
-                case 1: cost = [(1, "Emporium")] + parse_resource_list(variable_cost)[0], []
+        #case "Emporium":
+        #    match existing_tier:
+        #        case 0: cost = parse_resource_list(variable_cost)[0], []
+        #        case 1: cost = [(1, "Emporium")] + parse_resource_list(variable_cost)[0], []
 
     return group_costs(cost[0]), group_costs(cost[1])
 
@@ -792,30 +802,62 @@ def parse_resource_list(resource_string: str) -> Tuple[List[Tuple[int, unit_type
 
     return resource_list, invalid_resources
 
-async def check_debt(ctx: Context, member: discord.Member, costs: List[Tuple[int, unit_type]], auto_cancel: bool = False, extra_message: str = ""):
-    insufficient = []
-    cost_summary_lines = []
+async def check_debt(ctx: Context, member: discord.Member, costs: List[Tuple[int, unit_type]], auto_cancel: bool = False, extra_message: str = "", title="**Cost Summary**\n"):
     
-    for qty, unit in costs:
-        # Retrieve current user resource balance
-        current_balance = get_user_balance(member.id, unit)
-        if current_balance is None:
-            await send(ctx, f"User {member.display_name} does not exist. Use !create to create the user entry.")
-            return None
-        current_balance = int(current_balance)
+    # group costs by sheet
+    # e.g. sheet_costs = { sheet_obj: { unit: qty, ... }, ... }
+    sheet_costs: Dict[gspread.Worksheet, Dict[unit_type, int]] = {}
+    for (qty, unit) in costs:
+        sheet_obj = get_sheet(unit)
+        if not sheet_obj:
+            continue
+        if sheet_obj not in sheet_costs:
+            sheet_costs[sheet_obj] = {}
+        sheet_costs[sheet_obj][unit] = sheet_costs[sheet_obj].get(unit, 0) + qty
 
-        new_balance = current_balance - qty
-        if new_balance < 0:
-            # This means the user would go negative for this resource
-            insufficient.append(unit)
-        cost_summary_lines.append(
-            f"{unit}: {current_balance} -> {current_balance - qty}"
-        )
+    user_id_str = str(member.id)
+    cost_summary_lines = []
+    insufficient: List[unit_type] = []
+
+    try:
+        user_ids = next(iter(sheet_costs)).col_values(SHEET_COLUMNS[USER_ID])
+        # find row
+        row_index = user_ids.index(user_id_str) + 1
+    except ValueError:
+        await send(ctx, f"User {member.display_name} does not exist. Use !create to create the user entry.")
+        return None, ""
+
+    # For each sheet, read the row once, check the new balance for each relevant unit
+    for sheet_obj, unit_dict in sheet_costs.items():
+
+        row_values = sheet_obj.row_values(row_index)
+
+        # check for each unit
+        for unit, qty in unit_dict.items():
+            col_index = SHEET_COLUMNS.get(unit)
+            if not col_index:
+                await send(ctx, f"{unit} not recognized. Skipping it.")
+            old_val_str = "0"
+            if col_index <= len(row_values):
+                old_val_str = row_values[col_index - 1]
+            try:
+                old_val_int = int(old_val_str)
+            except ValueError:
+                old_val_int = 0
+
+            new_val = old_val_int - qty
+            # build summary line
+            cost_summary_lines.append(f"{unit}: {old_val_int} -> {new_val}")
+
+            # check negative
+            if 0 <= qty and new_val < 0:
+                insufficient.append(unit)
+
 
     # Prepare an embed or a message summarizing cost
     cost_message = (
         f"{extra_message}"
-        "**Cost Summary**\n" + "\n".join(cost_summary_lines)
+        f"{title}" + "\n".join(cost_summary_lines)
     )
 
     # If we have any resources going negative, warn the user
@@ -851,11 +893,11 @@ async def check_debt(ctx: Context, member: discord.Member, costs: List[Tuple[int
             reaction, user = await bot.wait_for("reaction_add", timeout=60.0, check=check)
         except asyncio.TimeoutError:
             await send(ctx, "Action timed out. No changes were made.")
-            return None
+            return None, ""
 
         if str(reaction.emoji) == "❌":
             await send(ctx, "Action canceled.")
-            return None
+            return None, ""
         # If ✅, proceed with deduction
         else:
             return True
@@ -871,7 +913,7 @@ async def check_debt(ctx: Context, member: discord.Member, costs: List[Tuple[int
                 color=discord.Color.green()
             )
         )
-        return True
+        return True, cost_message
 
 def troop_costs(unit: unit_type, count: int, use_silver: bool) -> List[Tuple[int, unit_type]]:
     """
@@ -1015,10 +1057,159 @@ async def add_log(ctx: Context, member: discord.Member, amount: str, unit: unit_
         editor_id=ctx.author.id,
         editor_name=ctx.author.name,
         result=current_balance,
-        message_link=ctx.message.jump_url,
+        message_link=ctx.message.jump_url
     )
 
     return current_balance
+
+
+
+def batch_add_all(ctx: Context, member: discord.Member, resource_list: str, log_msg: str, mult: int=1):
+    """
+    Batch-adds multiple units to a single user's balance with minimal sheet writes,
+    reading each relevant sheet only once and applying changes in one batch.
+    Then logs each changed unit in a single batch.
+
+    :param ctx: The command context (for logging, message URL).
+    :param member: The Discord member whose balance is updated.
+    :param resource_list: A list of (qty, unit) pairs, e.g. [(100, "Silver"), (2, "Crops")].
+    :param log_msg: A source/reason message for logging.
+    :param mult: A multiplier to apply to all qty in resource_list (defaults to 1).
+    :return: A tuple (old_values, final_values)   # dictionaries of {unit: str_val}
+    """
+
+    # We'll accumulate total changes for each unit
+    changes_map = {}  # unit -> total quantity
+    for (qty, unit) in resource_list:
+        changes_map[unit] = changes_map.get(unit, 0) + qty*mult
+
+    # 2) Group changes by which sheet they belong to, so we can do minimal reads/writes
+    #    e.g. { <sheet_obj>: { <unit>: qty, ... }, ... }
+    sheet_changes: Dict[gspread.Worksheet, Dict[str, int]] = {}
+    for unit, qty in changes_map.items():
+        sheet_obj = get_sheet(unit)
+        if not sheet_obj:
+            continue
+        if sheet_obj not in sheet_changes:
+            sheet_changes[sheet_obj] = {}
+        sheet_changes[sheet_obj][unit] = qty
+
+    # 3) For each sheet, we read it once, find the row for user, 
+    #    compute new values for each relevant unit, do one batch update
+    # We'll also prepare log entries
+    user_id_str = str(member.id)
+    user_name = member.name
+    display_name = member.display_name
+
+    # We'll store for each changed resource, the final new value to log
+    # e.g. final_values[unit] = new_balance
+    final_values = {}
+    old_values = {}
+
+    # read all user IDs
+    try:
+        user_ids = next(iter(sheet_changes)).col_values(SHEET_COLUMNS[USER_ID])
+        # find row
+        row_index = user_ids.index(user_id_str) + 1
+    except ValueError:
+        return False
+
+    for sheet_obj, unit_dict in sheet_changes.items():
+
+        # We'll do partial batch update for each changed unit
+        # but let's do it in a single request
+        # We also need to read the old values to compute the final
+        requests = []
+        # We also want to store the final numeric value in final_values
+        # We'll read the row in memory. Or do a single row_values?
+        row_values = sheet_obj.row_values(row_index)  # entire row
+        # We'll invert column->value from row_values
+        # But let's do a simpler approach: for each changed unit, read the oldVal, parse int if possible
+        # then newVal = oldVal + changes
+        # add request in a single array
+        has_name_updated = False
+
+        for unit, delta in unit_dict.items():
+            col_index = SHEET_COLUMNS.get(unit)
+            if not col_index:
+                continue
+            old_val = "0"
+            if col_index <= len(row_values):
+                old_val = row_values[col_index - 1]  # col_index is 1-based, row_values is 0-based
+            try:
+                old_val_int = int(old_val)
+            except ValueError:
+                old_val_int = 0
+            new_val_int = old_val_int + delta
+            new_val_str = str(new_val_int)
+
+            # queue up the batch update
+            a1_notation = gspread.utils.rowcol_to_a1(row_index, col_index)
+            requests.append({
+                "range": a1_notation,
+                "values": [[new_val_str]]
+            })
+
+            # if it's the silver_sheet, we also update user_name, display_name if needed
+            # But you might do that in your existing set_user_balance logic. We'll do it here for batch:
+            if not has_name_updated and sheet_obj == silver_sheet:
+                has_name_updated = True
+                # update discord name, display name
+                dname_col = SHEET_COLUMNS.get(DISCORD_NAME)
+                disp_col  = SHEET_COLUMNS.get(DISPLAY_NAME)
+                if dname_col:
+                    a1_dname = gspread.utils.rowcol_to_a1(row_index, dname_col)
+                    requests.append({
+                        "range": a1_dname,
+                        "values": [[user_name]]
+                    })
+                if disp_col:
+                    a1_disp = gspread.utils.rowcol_to_a1(row_index, disp_col)
+                    requests.append({
+                        "range": a1_disp,
+                        "values": [[display_name]]
+                    })
+
+            # store final
+            final_values[unit] = new_val_str
+            old_values[unit] = old_val
+
+
+        # do the batch update
+        if requests:
+            sheet_obj.batch_update(requests, value_input_option="USER_ENTERED")
+
+    # 4) Once all sheets are updated in one pass each, we log each resource separately in one batch
+    # build the logs
+    timestamp_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    editor_id = str(ctx.author.id)
+    editor_name = ctx.author.name
+
+    log_rows = []
+    for (qty, unit) in resource_list:
+        # final new val is final_values.get(unit)
+        final_val_str = final_values.get(unit, "N/A")
+
+        row = [
+            user_id_str,          # user ID
+            user_name,            # Discord name
+            timestamp_str,        # Date
+            str(qty),             # Amount changed
+            unit,                 # Type
+            log_msg,              # Source
+            editor_id,            # EditorID
+            editor_name,          # Editor Discord name
+            final_val_str,        # Result
+            ctx.message.jump_url  # Message Link
+        ]
+        log_rows.append(row)
+
+    if log_rows:
+        log_sheet.append_rows(log_rows, value_input_option="USER_ENTERED")
+
+    return (old_values, final_values)
+    # done, send confirmation
+    #await ctx.send(f"Batch add for {member.display_name} completed. Updated {len(resource_list)} resources in minimal sheet writes!")
 
 @bot.event
 async def on_ready():
@@ -1183,7 +1374,9 @@ async def create(ctx: commands.Context,
         "",         # Army Doctrine
         "",         # Navy Doctrine
         0,          # Temp Army
-        0           # Temp Navy
+        0,          # Temp Navy
+        0,         # Capital Navy
+        ""          # General
     ]
 
     resource_row = [
@@ -1216,11 +1409,11 @@ async def create(ctx: commands.Context,
         0, # T3City
         0, # T1Industry
         0, # T2Industry
+        0, # T3Industry
         0, # T1Fort
         0, # T2Fort
         0, # T3Fort
         0, # Monument
-        0  # Emporium
     ]
 
     silver_sheet.append_row(silver_row)
@@ -1350,6 +1543,87 @@ async def add(ctx: Context, member: discord.Member, amount: int, unit_str: str, 
         new_xp = log_transaction(member.id, user_name, amount, XP, source, author(ctx).id, author(ctx).name, result, ctx.message.jump_url)
 
     return await send(ctx, f"Added {amount} {unit} to {member.display_name}. New amount: {new_balance}")
+
+
+@bot.hybrid_command(name="add_all", brief="Add multiple resources to a player's balance in one batch.")
+@app_commands.describe(
+    member="The user to whom these resources will be added.",
+    resources='A comma-separated list of resources (e.g., "100 Silver, -2 Crops").',
+    log_msg="An optional message/source for logging the addition (e.g., 'Quest Reward')."
+)
+async def add_all(
+    ctx: commands.Context, 
+    member: discord.Member, 
+    resources: str, 
+    log_msg: str = "No source provided"
+):
+    """
+    Add multiple resources to a single player's balance in one minimal sheet update.
+
+    Usage
+    ------
+      !add_all @User "100 Silver, -2 Crops"
+
+    Example
+    --------
+      !add_all @User "10 Silver, 5 XP" "Quest Reward"
+
+    Parameters
+    -----------
+    member: discord.Member
+        The user who will receive these resources.
+    resources: str
+        A comma-separated list of resource additions (e.g., "100 Silver, -2 Crops").
+    log_msg: str, optional
+        A short message or reason for the transaction, default is "No source provided".
+    """
+    if ctx.interaction and not ctx.interaction.response.is_done():
+        await ctx.interaction.response.defer()  # Acknowledge the interaction immediately
+
+    if not is_authorized(ctx):
+        return await send(ctx, "You do not have permission to modify the sheet.")
+
+    member = get_member(member)
+    if member == None:
+        return await ctx.send(f"Member fetch error.")
+
+    resource_list, invalid = parse_resource_list(resources)
+
+    if invalid:
+        return await ctx.send(f"Invalid resources: {', '.join(invalid)}. Aborting Addition.")
+
+    if not resource_list:
+        return await ctx.send("No valid resources to add.")
+        
+    resource_list = group_costs(resource_list)
+
+
+    confirm = batch_add_all(ctx, member, resource_list, log_msg)
+    if not confirm:
+        return await ctx.send("User not found.")
+    old, final = confirm
+    
+    cost_summary_lines = []
+    
+    for unit in final.keys():
+        cost_summary_lines.append(
+            f"{unit}: {old[unit]} -> {final[unit]}"
+        )
+
+    # Prepare an embed or a message summarizing cost
+    cost_message = (
+        "**Change Summary**\n" + "\n".join(cost_summary_lines)
+    )
+
+    return await send(ctx, 
+        embed=discord.Embed(
+            description=(
+                f"Added resources to {member.display_name}. New Amounts:\n\n{cost_message}\n"
+            ),
+            color=discord.Color.blue()
+        )
+    )
+
 
 
 @bot.hybrid_command(name="delete", brief="Delete a user's records from all sheets except the log.")
@@ -1631,7 +1905,7 @@ async def status(ctx: commands.Context, category: str | None = None, member: dis
     elif ctx.author != member and not is_authorized(ctx):
         return await ctx.send("You do not have permission to check another player's status.")
 
-
+    member = get_member(member)
     user_id = member.id
 
     try:
@@ -1709,11 +1983,11 @@ async def status(ctx: commands.Context, category: str | None = None, member: dis
                 "T3City": val_building(T3_CITY),
                 "T1Industry": val_building(T1_INDUSTRY),
                 "T2Industry": val_building(T2_INDUSTRY),
+                "T3Industry": val_building(T3_INDUSTRY),
                 "T1Fort": val_building(T1_FORT),
                 "T2Fort": val_building(T2_FORT),
                 "T3Fort": val_building(T3_FORT),
                 "Monument": val_building(MONUMENT),
-                "Emporium": val_building(EMPORIUM),
             }
 
             buildings_str = "\n".join([f"**{b}:** {val}" for b, val in building_stats.items()])
@@ -1818,6 +2092,9 @@ async def status(ctx: commands.Context, category: str | None = None, member: dis
             temp_army = val_war(TEMP_ARMY)
             temp_navy = val_war(TEMP_NAVY)
 
+            capital_navy = val_war(CAPITAL_NAVY)
+            general = val_war(GENERAL)
+
             embed = discord.Embed(
                 title=f"{member.display_name}'s Basic Info",
                 color=discord.Color.blue()
@@ -1828,6 +2105,8 @@ async def status(ctx: commands.Context, category: str | None = None, member: dis
                 f"**Navy:** {navy}+{temp_navy}/{navy_cap}\n"
                 f"**Army Doctrine:** {army_doc}\n"
                 f"**Navy Doctrine:** {navy_doc}\n"
+                f"{f"**Capital Navy Bonus:** {capital_navy}\n" if capital_navy else ""}"
+                f"{f"**General Bonus:** {general}\n" if capital_navy else ""}"
                 
             ), inline=False)
             return await ctx.send(embed=embed)         
@@ -1926,11 +2205,11 @@ async def status(ctx: commands.Context, category: str | None = None, member: dis
         "T3City": val_building(T3_CITY),
         "T1Industry": val_building(T1_INDUSTRY),
         "T2Industry": val_building(T2_INDUSTRY),
+        "T3Industry": val_building(T3_INDUSTRY),
         "T1Fort": val_building(T1_FORT),
         "T2Fort": val_building(T2_FORT),
         "T3Fort": val_building(T3_FORT),
         "Monument": val_building(MONUMENT),
-        "Emporium": val_building(EMPORIUM),
     }
 
     # War
@@ -1938,11 +2217,13 @@ async def status(ctx: commands.Context, category: str | None = None, member: dis
         "Army": f"{val_war(ARMY)}+{val_war(TEMP_ARMY)}/{val_war(ARMY_CAP)}",
         "Navy": f"{val_war(NAVY)}+{val_war(TEMP_NAVY)}/{val_war(NAVY_CAP)}",
         "Army Doctrine": val_war(ARMY_DOCTRINE),
-        "Navy Doctrine": val_war(NAVY_DOCTRINE)
+        "Navy Doctrine": val_war(NAVY_DOCTRINE),
+        "Capital Navy Bonus": val_war(CAPITAL_NAVY),
+        "General Bonus": val_war(GENERAL)
     }
 
     embed = discord.Embed(title=f"{member.display_name}'s Status", color=discord.Color.blue())
-    embed.set_thumbnail(url=ctx.author.avatar.url if ctx.author.avatar else "")
+    embed.set_thumbnail(url=member.avatar.url if member.avatar else "")
 
     # Basic info field
     embed.add_field(name="Basic Info", value=(
@@ -1973,7 +2254,7 @@ async def status(ctx: commands.Context, category: str | None = None, member: dis
     embed.add_field(name="Buildings", value=buildings_str, inline=False)
 
     # War Field
-    war_str = "\n".join([f"**{b}:** {val}" for b, val in war_stats.items()])
+    war_str = "\n".join([f"**{b}:** {val}" for b, val in war_stats.items() if not (b=="Capital Navy Bonus" or b=="General Bonus") or str(val)]) # only include those 2 bonuses if they exist
     embed.add_field(name="War", value=war_str, inline=False)
 
 
@@ -2175,16 +2456,22 @@ async def action_autocomplete(
     params="Specify 'all' for detailed logs or 'short' for minimal logs.",
     action="Specify 'latest' for recent logs or 'full' for the complete log.",
     number="The number of recent entries to display (used with 'latest').",
-    user="Filter logs for a specific user (optional)."
+    user="Filter logs for a specific user (optional).",
+    unit="Filter logs for a specific unit (optional)."
 )
 @app_commands.autocomplete(params=length_autocomplete, action=action_autocomplete)
-async def changelog(ctx: commands.Context, params: str, action: str = "latest", number: int = 5, user: discord.Member = None):
+async def changelog(
+    ctx: commands.Context,
+    params: str, action: str = "latest",
+    number: int = 5,
+    user: discord.Member = None,
+    unit: str = None):
     """
-    Show transaction logs for users or the entire game.\n 
+    Show transaction logs for users or the entire game, with an optional filter for a specific unit.\n 
     ‎\n 
     Usage\n 
     -----------\n 
-    !changelog [all | short] [latest | full] [number] [@User]\n 
+    !changelog [all | short] [latest | full] [number] [@User] [unit]\n 
     ‎\n 
     Examples\n 
     -----------\n 
@@ -2196,6 +2483,8 @@ async def changelog(ctx: commands.Context, params: str, action: str = "latest", 
       Sends the complete detailed log via DM (mods only).\n 
     - !changelog short latest 10 @User\n 
       Shows the last 10 minimal log entries for a specific user in the channel.\n 
+    - !changelog all latest 5 @User XP
+      Shows the last 5 detailed log entries for a specific user involving the 'XP' unit.
 
     Parameters
     -----------
@@ -2207,7 +2496,10 @@ async def changelog(ctx: commands.Context, params: str, action: str = "latest", 
         The number of recent entries to display when using 'latest' (default is 5).
     user: discord.Member, optional
         Filter logs for a specific user. Defaults to all users.
+    unit: str, optional
+        Filter logs for a specific unit (e.g., 'Silver', 'XP', 'Crops'). Defaults to showing all units.
     """
+
     if isinstance(ctx.interaction, Interaction) and not ctx.interaction.response.is_done():
         await ctx.interaction.response.defer()
 
@@ -2217,6 +2509,14 @@ async def changelog(ctx: commands.Context, params: str, action: str = "latest", 
     # Filter by user if specified
     if user:
         records = [r for r in records if r[USER_ID] == user.id]
+
+    # Filter by unit if specified
+    if not get_unit(unit):
+        return await send(ctx, f"{unit} is not a valid unit. Please input valid unit.")
+    unit = get_unit(unit) 
+
+    if unit:
+        records = [r for r in records if r[TYPE] == unit]
 
     # Handle empty records
     if not records:
@@ -2329,7 +2629,7 @@ async def name(ctx: commands.Context, member: discord.Member):
     building_name="The building to construct (e.g., T1City, T2City, T1Fort, etc.).",
     tile_name="The name of the tile where the building is constructed (optional).",
     cost="The cost for the building, including the tools for skipping essays (e.g., '50 Silver, 6 Crops').",
-    costal="Whether the building is coastal (yes/no).",
+    coastal="Whether the building is coastal (yes/no).",
     msg_link="A message link to the message with an attached image showing the tile where the building is built. This is required when using slash commands."
 )
 async def build(
@@ -2338,7 +2638,7 @@ async def build(
     building_name: str,
     tile_name: str = "",
     cost: str = "",
-    costal: str = "",
+    coastal: str = "",
     msg_link: str = ""
 ):
     """
@@ -2346,7 +2646,7 @@ async def build(
     ‎\n 
     Usage\n 
     -----------\n 
-    !build @User building_name [cost] [costal] [msg_link]\n   
+    !build @User building_name [cost] [coastal] [msg_link]\n   
     ‎\n 
     Examples\n 
     -----------\n 
@@ -2362,10 +2662,10 @@ async def build(
         The building to construct (e.g., T1City, T2City, T1Fort, etc.).
     tile_name: str, optional
         The name of the tile where the building is constructed (default is "").
-    costs: str, optional
+    cost: str, optional
         A comma-separated list of the resources and amounts making up the cost of the building (e.g., '100 Silver, 2 Crops').
-    costal: str, optional
-        Whether the building is coastal. Acceptable values: "yes" "true", "costal", "no", "false" (default is "").
+    coastal: str, optional
+        Whether the building is coastal. Acceptable values: "yes" "true", "coastal", "no", "false" (default is "").
     msg_link: str, optional
         A message link to the message with an attached image showing the tile where the building is built. This is required when using slash commands. (default is "").
     """
@@ -2375,7 +2675,7 @@ async def build(
     if not is_authorized(ctx):
         return await ctx.send("You do not have permission to build structures.")
         
-    is_costal = costal.strip().lower() in {"costal", "true", "yes"}
+    is_coastal = coastal.strip().lower() in {"coastal", "true", "yes"}
 
 
     building_name = get_unit(building_name)
@@ -2384,7 +2684,7 @@ async def build(
 
 
     # Ensure the logging channels are configured
-    if building_name == T1_INDUSTRY or T2_INDUSTRY:
+    if building_name in [T1_INDUSTRY, T2_INDUSTRY, T3_INDUSTRY]:
         channel_id = config["resource_channel_id"]
         attachment, channel, referenced_msg = await check_attachment(ctx, channel_id, "resource", msg_link)
         has_image = bool(attachment)
@@ -2403,14 +2703,14 @@ async def build(
     try:
         if building_name == MONUMENT:
             existing_tier = int(get_user_balance(member.id, MONUMENT))
-        elif building_name == EMPORIUM:
-            existing_tier =int(get_user_balance(member.id, EMPORIUM))
+        #elif building_name == EMPORIUM:
+        #    existing_tier =int(get_user_balance(member.id, EMPORIUM))
     except:
         existing_tier = 0
 
 
     # Get the resource costs from your building_need function
-    costs, bonuses = building_need(building_name, cost, existing_tier, is_costal)
+    costs, bonuses = building_need(building_name, cost, existing_tier, is_coastal)
     if not costs:
         return await ctx.send(f"Building type '{building_name}' is invalid or not implemented.")
 
@@ -2425,21 +2725,33 @@ async def build(
         f"**Building Costs:** {', '.join(f"{count} {name}" for count, name in costs)}\n"
     )
 
-    check = await check_debt(ctx, member, costs, True, extra_msg)
+    check, summary = await check_debt(ctx, member, costs, True, extra_msg)
     if not check: return
 
 
     # At this point, we confirmed we want to proceed. Deduct resources from the sheet.
+    accumulated_changes = []
+
+    # Subtract costs
     for qty, resource_name in costs:
+        accumulated_changes.append((-qty, get_unit(resource_name)))
 
-        await add_log(ctx, member, -qty, get_unit(resource_name), f"Building {building_name} in {tile_name}")
-
-
+    # Add bonuses
     for qty, resource_name in bonuses:
+        accumulated_changes.append((qty, get_unit(resource_name)))
 
-        await add_log(ctx, member, qty, get_unit(resource_name), f"Building {building_name} in {tile_name}")
+    # Add +1 to the building_name unit
+    accumulated_changes.append((1, building_name)) 
 
-    await add_log(ctx, member, 1, building_name, f"Building {building_name} in {tile_name}")
+    # Now do a single batch-add
+    old_new = batch_add_all(
+        ctx=ctx,
+        member=member,
+        resource_list=accumulated_changes,
+        log_msg=f"Building {building_name} in {tile_name}"
+    )
+    if not old_new:
+        return await ctx.send("User not found. Aborting Building.")
 
     await referenced_msg.add_reaction("✅")
     # Post the image and message in the building channel
@@ -2522,128 +2834,61 @@ async def trade(
     if not user1_list and not user2_list:
         return await ctx.send("No resources specified to trade.")
 
-    user1_id = user1.id
-    user2_id = user2.id
+    # 
+    user1_changes = []
+    for (qty, unit) in user1_list:
+        user1_changes.append((-qty, unit))
+    for (qty, unit) in user2_list:
+        user1_changes.append((+qty, unit))
 
-    # Track resource shortfalls for each user
-    insufficient_user1 = []
-    insufficient_user2 = []
 
-    # Summaries
-    summary_user1_lines = []
-    summary_user2_lines = []
+    user2_changes = []
+    for (qty, unit) in user2_list:
+        user2_changes.append((-qty, unit))
+    for (qty, unit) in user1_list:
+        user2_changes.append((+qty, unit))
 
-    # 3. Check user1's resources for user1_list
-    for (qty, res_name) in user1_list:
-        current_balance = get_user_balance(user1_id, res_name)
-        if current_balance is None:
-            return await ctx.send(f"An error occurred when fetching the current {res_name} balance of {user1.display_name}.")
-        current_balance = int(current_balance)
+    can_user1, summary1 = await check_debt(ctx, user1, [(-qty, resource) for (qty, resource) in user1_changes], title="")
+    if not can_user1:
+        return  # canceled or insufficient resources for user1
 
-    
-        new_balance = current_balance - qty
-        if new_balance < 0:
-            insufficient_user1.append(res_name)
-        summary_user1_lines.append(f"{res_name}: {current_balance} -> {new_balance}")
-
-        current_balance = get_user_balance(user2_id, res_name)
-        if current_balance is None:
-            return await ctx.send(f"An error occurred when fetching the current {res_name} balance of {user2.display_name}.")
-        current_balance = int(current_balance)
-
-        new_balance = current_balance + qty
-        summary_user2_lines.append(f"{res_name}: {current_balance} -> {new_balance}")
-
-    # Check user2's resources for user2_list
-    for  (qty, res_name) in user2_list:
-        current_balance = get_user_balance(user2_id, res_name)
-        if current_balance is None:
-            return await ctx.send(f"An error occurred when fetching the current {res_name} balance of {user2.display_name}.")
-        current_balance = int(current_balance)
-
-        new_balance = current_balance - qty
-        if new_balance < 0:
-            insufficient_user2.append(res_name)
-        summary_user2_lines.append(f"{res_name}: {current_balance} -> {new_balance}")
-
-        current_balance = get_user_balance(user1_id, res_name)
-        if current_balance is None:
-            return await ctx.send(f"An error occurred when fetching the current {res_name} balance of {user1.display_name}.")
-        current_balance = int(current_balance)
-        new_balance = current_balance + qty
-        summary_user1_lines.append(f"{res_name}: {current_balance} -> {new_balance}")
-
+    can_user2, summary2 = await check_debt(ctx, user2, [(-qty, resource) for (qty, resource) in user2_changes], title="")
+    if not can_user2:
+        return  # canceled or insufficient resources for user2
 
     # Create an embed summarizing the trade
     embed = discord.Embed(title="Trade Summary", color=discord.Color.blue())
     embed.add_field(
         name=f"{user1.display_name} → {user2.display_name}",
-        value="\n".join(summary_user1_lines) if summary_user1_lines else "Nothing sent",
+        value="\n".join(summary1) if summary1 else "Nothing sent",
         inline=False
     )
     embed.add_field(
         name=f"{user2.display_name} → {user1.display_name}",
-        value="\n".join(summary_user2_lines) if summary_user2_lines else "Nothing sent",
+        value="\n".join(summary2) if summary2 else "Nothing sent",
         inline=False
     )
 
-    # Warnings if negative
-    negatives = []
-    if insufficient_user1:
-        negatives.append(f"{user1.display_name} going negative in: {', '.join(insufficient_user1)}")
-    if insufficient_user2:
-        negatives.append(f"{user2.display_name} going negative in: {', '.join(insufficient_user2)}")
+    # 3. Apply changes with batch_add_all
+    # user1
+    result_user1 = batch_add_all(
+        ctx=ctx,
+        member=user1,
+        resource_list=user1_changes,
+        log_msg=f"Trade with {user2.name}"
+    )
+    if not result_user1:
+        return await ctx.send("User1 not found. Aborting Trade")
 
-    if negatives:
-        embed.add_field(
-            name="Warning: Insufficient Resources",
-            value=("\n".join(negatives) + "\nReact with ✅ to confirm or ❌ to cancel."),
-            inline=False
-        )
-
-    msg = await ctx.send(embed=embed)
-
-    # 4. If negatives exist, prompt confirmation
-    if insufficient_user1 or insufficient_user2:
-        await msg.add_reaction("✅")
-        await msg.add_reaction("❌")
-
-        def check(reaction: Reaction, user):
-            return (
-                user == ctx.author
-                and str(reaction.emoji) in ["✅", "❌"]
-                and reaction.message.id == msg.id
-            )
-
-        try:
-            reaction, user = await bot.wait_for("reaction_add", timeout=60.0, check=check)
-        except asyncio.TimeoutError:
-            await ctx.send("Trade request timed out. No changes made.")
-            return
-        if str(reaction.emoji) == "❌":
-            await ctx.send("Trade canceled. No changes made.")
-            return
-        # Otherwise proceed
-
-    # 5. Execute the trade
-    # user1 -> user2
-    for (qty, res_name) in user1_list:
-        res_name = get_unit(res_name)
-        # Deduct from user1
-        await add_log(ctx, user1, -qty, res_name, f"Trade to {user2.name}")
-
-        # Add to user2
-        await add_log(ctx, user2, qty, res_name, f"Trade from {user1.name}")
-
-    # user2 -> user1
-    for (qty, res_name) in user2_list:
-        res_name = get_unit(res_name)
-        # Deduct from user2
-        await add_log(ctx, user2, -qty, res_name, f"Trade to {user1.name}")
-
-        # Add to user1
-        await add_log(ctx, user1, qty, res_name, f"Trade from {user2.name}")
-
+    # user2
+    result_user2 = batch_add_all(
+        ctx=ctx,
+        member=user2,
+        resource_list=user2_changes,
+        log_msg=f"Trade with {user1.name}"
+    )
+    if not result_user2:
+        return await ctx.send("User2 not found. Trade only registered from on user1. Ask bot creator to intervene.")
 
     await ctx.send(f"Trade completed between {user1.display_name} and {user2.display_name}.")
 
@@ -2657,6 +2902,20 @@ async def respawn(ctx: commands.Context):
     This command wipes out all resource columns in the Resource sheet, then for each user, 
     re-adds amounts equal to their production tiles from the Production sheet. This affects 
     every player in the game.
+
+    It first converts leftover basic & advanced resources into Silver,
+    up to a limit based on city tiers.
+    Then re-adds amounts from Production tiles.
+
+    Conversion Rules
+    ---------------
+    - T1City => can convert 3 leftover resources (any type except Industry).
+    - T2City => can convert 9 leftover resources each.
+    - T3City => also 9 leftover resources each.
+    - Basic resource => +5 silver
+    - Advanced resource => +10 silver
+    - No leftover Industry is converted to silver.
+    - Advanced resources are prioritized for conversion over basic.
 
     Usage
     -----------
@@ -2705,6 +2964,130 @@ async def respawn(ctx: commands.Context):
     # If we got here, user reacted with ✅
     await ctx.send("Respawn is in progress...")
 
+    # BUILDING SHEET => get T1City, T2City, T3City to compute user city_limit
+    # user_city_map[user_id] = city_limit
+    # T1 => 3 each, T2 => 9 each, T3 => 9 each
+    building_data = buildings_sheet.get_all_records()  
+    user_city_map = {}
+    for row in building_data:
+        uid = row.get(USER_ID)
+        if not uid:
+            continue
+        t1 = row.get(T1_CITY, 0) or 0
+        t2 = row.get(T2_CITY, 0) or 0
+        t3 = row.get(T3_CITY, 0) or 0
+        city_limit = (t1 * 3) + (t2 * 9) + (t3 * 9)
+        user_city_map[uid] = city_limit
+
+
+    # RESOURCE SHEET => read leftover resources for each user, store in memory
+    resource_data = resource_sheet.get_all_records()
+    # note: the first row is a header, so row #2 => resource_data[0]
+    # We'll want to store leftover for each user in leftover_map[uid] = {rname: int_value, ...}
+
+    leftover_map = {}
+    user_ids = []
+    for i, row in enumerate(resource_data, start=2):
+        uid = row.get(USER_ID)
+        if not uid:
+            continue
+        leftover_map[uid] = {}
+        user_ids.append(uid)
+        for rname in RESOURCE_COLUMNS.keys():
+            if rname == INDUSTRY:
+                # skip leftover industry => no silver from that
+                leftover_map[uid][rname] = 0
+                continue
+            val_str = row.get(rname, "0")
+            try:
+                val_int = int(val_str)
+            except ValueError:
+                val_int = 0
+            leftover_map[uid][rname] = val_int
+
+    # Set of Advances Resources
+    advanced_list = [SUPPLIES, TOOLS, ENERGY, CEMENT]
+    advanced_set = set(advanced_list)
+
+    # For each user, pick advanced leftover first, then basic leftover, up to city_limit
+    # Gains 10 silver for each advanced leftover consumed, 5 silver for each basic leftover
+    # We'll store final leftover as 0 in memory, plus total silver gained in silver_gain[uid]
+    silver_gain = {}
+    for uid, city_limit in user_city_map.items():
+        leftover_user = leftover_map.get(uid, {})
+        if not leftover_user:
+            continue
+        # gather advanced resources leftover, basic leftover
+        # advanced usage => leftover in advanced_set
+        # We'll build a list of (rname, leftover_qty) for advanced, basic
+        advanced_portion = []
+        basic_portion = []
+        for rname, qty in leftover_user.items():
+            if rname in [USER_ID, ""]: 
+                continue
+            if rname == INDUSTRY:
+                continue
+            if qty <= 0:
+                continue
+            if rname in advanced_set:
+                advanced_portion.append((rname, qty))
+            else:
+                basic_portion.append((rname, qty))
+
+        # consume advanced first
+        leftover_to_convert = city_limit
+        user_silver = 0
+
+        # Convert advanced
+        for (rname, qty) in advanced_portion:
+            if leftover_to_convert <= 0:
+                break
+            take = min(qty, leftover_to_convert)
+            user_silver += take * 10  # advanced => +10 each
+            leftover_user[rname] -= take
+            leftover_to_convert -= take
+
+        # Convert basic
+        for (rname, qty) in basic_portion:
+            if leftover_to_convert <= 0:
+                break
+            take = min(qty, leftover_to_convert)
+            user_silver += take * 5
+            leftover_user[rname] -= take
+            leftover_to_convert -= take
+
+        # store silver_gain
+        silver_gain[uid] = user_silver
+
+        # leftover_user is now updated in memory => effectively zeroing out consumed leftover
+
+    silver_sheet_data = silver_sheet.get_all_records()
+    # build user-> row
+    #user_ids_silver = silver_sheet.col_values(SHEET_COLUMNS[USER_ID])
+    row_updates = {}
+    for i, rec in enumerate(silver_sheet_data, start=2):
+        uid = rec.get(USER_ID)
+        if uid in silver_gain:
+            old_silver_str = rec.get(SILVER, "0")
+            try:
+                old_silver_int = int(old_silver_str)
+            except ValueError:
+                old_silver_int = 0
+            new_silver_int = old_silver_int + silver_gain[uid]
+            row_updates[i] = new_silver_int
+
+    # single batch update
+    requests = []
+    for row_i, new_val in row_updates.items():
+        a1 = gspread.utils.rowcol_to_a1(row_i, SHEET_COLUMNS[SILVER])
+        requests.append({
+            "range": a1,
+            "values": [[str(new_val)]]
+        })
+    if requests:
+        silver_sheet.batch_update(requests, value_input_option="USER_ENTERED")
+
+
     # 1) Wipe all resource columns to 0 in the Resource sheet
     for key, col in RESOURCE_COLUMNS.items():
         batch_reset_column(resource_sheet, key)
@@ -2750,9 +3133,10 @@ async def respawn(ctx: commands.Context):
 
         t1_count = record.get(T1_INDUSTRY, 0) or 0
         t2_count = record.get(T2_INDUSTRY, 0) or 0
+        t3_count = record.get(T3_INDUSTRY, 0) or 0
 
-        if t1_count or t2_count:
-            production_map[uid][INDUSTRY] = (3 * t1_count + 6 * t2_count)
+        if t1_count or t2_count or t3_count:
+            production_map[uid][INDUSTRY] = (3 * t1_count + 6 * t2_count + 9*t3_count)
         
     # 3) Construct a 2D array that overwrites all user resource columns
     #    We'll start by setting all resource columns to 0, then fill them with tile counts if any.
@@ -2876,6 +3260,7 @@ async def respawn(ctx: commands.Context):
     resource_amount="The amount of the resource to add.",
     resource_name="The resource name (e.g., Crops, Timber, Metal).",
     tile_amount="The number of tiles to add (defaults to resource_amount if not specified).",
+    used_spawns="The amount of monthly spawns used (defaults to 1)",
     reason="The reason for adding the resource and tile (defaults to 'Use of monthly resource spawn.').",
     msg_link="A message link to the message with an attached image showing where the tiles are spawned for context (required for slash commands)."
 )
@@ -2885,6 +3270,7 @@ async def spawn(
     resource_amount: int,
     resource_name: str,
     tile_amount: int = -1,
+    used_spawns: int = 1,
     reason: str = "Use of monthly resource spawn.",
     msg_link: str = ""
 ):
@@ -2904,6 +3290,8 @@ async def spawn(
         - This would add 100 Crops and 2 CropsTile to @User, logging each addition.\n
     !spawn @User 6 Crops\n
         - This would add 6 Crops and 6 CropsTile to @User (default behavior).\n
+    !spawn @User 12 Crops 12 2\n
+        - This would add 12 Crops and 12 CropsTile using 2 monthly spawns to @User.\n
 
     Parameters
     ----------
@@ -2915,6 +3303,8 @@ async def spawn(
         The resource name (e.g., Crops, Timber, Metal).
     tile_amount: int, optional
         The number of tiles to add (defaults to resource_amount if not specified).
+    used_spawns: int, optional
+        The amount of monthly spawns used (defaults to 1).
     reason: str, optional
         The reason for adding the resource and tile (defaults to 'Use of monthly resource spawn.').
     msg_link: str, optional
@@ -2942,11 +3332,11 @@ async def spawn(
     if spawns is None:
         return await ctx.send(f"An error occurred when fetching the current {USED_SPAWNS} balance of {member.display_name}.")
     spawns = int(spawns)
-    if spawns >= NUMBER_OF_SPAWNS:
+    if spawns+used_spawns > NUMBER_OF_SPAWNS:
         embed = discord.Embed(
-            title = f"Spawn cap reached - 'Proceed?",
+            title = f"Spawn cap reached (using {used_spawns} monthly spawns) - 'Proceed?",
             description=(
-                f"{member.display_name} has reached the resource spawn cap.\n"
+                f"{member.display_name} will reach the resource spawn cap.\n"
                 f"React with ✅ to confirm the spawn anyway, or ❌ to cancel."
             ),
             color=discord.Color.red()
@@ -2983,14 +3373,22 @@ async def spawn(
 
     tile_name = resource_to_tile[resource_name]
 
-    # Update the resource in the resource sheet
-    await add_log(ctx, member, resource_amount, resource_name, reason)
+    # Accumulate all resource changes in one list
+    spawn_changes = [
+        (resource_amount, resource_name), 
+        (tile_amount, tile_name),        
+        (used_spawns, USED_SPAWNS)        
+    ]
 
-    # Update the tile count in the production sheet
-    await add_log(ctx, member, tile_amount, tile_name, reason)
-
-    # Update the number of used spawns
-    await add_log(ctx, member, 1, USED_SPAWNS, reason)
+    # Then call batch_add_all once
+    result = batch_add_all(
+        ctx=ctx,
+        member=member,
+        resource_list=spawn_changes,
+        log_msg=reason
+    )
+    if not result:
+        return await ctx.send("User not found. Aborting Spawn.")
 
 
     await referenced_msg.add_reaction("✅")
@@ -3325,7 +3723,7 @@ async def deploy(
     member: discord.Member,
     count: int,
     unit: str,
-    pay_with: str,
+    cost: str,
     date_of_arrival: str = "",
     *,
     source: str = "Deployment."
@@ -3340,8 +3738,8 @@ async def deploy(
     ‎\n
     Usage\n
     ------\n
-    !deploy @User Army Silver 3 "Loaned Armies from Hungary"\n
-    !deploy @User Navy Resources 1 2024-12-23 "Event-spawned boats"\n
+    !deploy @User Army "35 silver" 3 "Loaned Armies from Hungary"\n
+    !deploy @User Navy "4 timber, 1 tools, 1 supplies" 1 2024-12-23 "Event-spawned boats"\n
 
     Parameters
     ----------
@@ -3351,8 +3749,8 @@ async def deploy(
         The number of troops to deploy.
     unit: str
         The unit type (e.g., Army, Temp Army, Navy, Temp Navy).
-    pay_with: str
-        The payment method ('Silver' or 'Resources').
+    cost: str
+        A comma-separated list of the resources and amounts making up the cost of the deployment (e.g., '35 Silver, 1 Supplies').
     date_of_arrival: str, optional
         The date when the deployment arrives (YYYY-MM-DD). Defaults to 2 weeks from now.
     source: str, optional
@@ -3368,49 +3766,78 @@ async def deploy(
 
     member = get_member(member)
     unit = get_unit(unit)
-    if not unit:
+    if not unit or unit not in [ARMY, TEMP_ARMY, NAVY, TEMP_NAVY]:
         return await ctx.send(f"Invalid unit type. Please choose '{ARMY}', '{TEMP_ARMY}', '{NAVY}', '{TEMP_NAVY}'.")
     
 
     unit_short = unit[-4:].capitalize()
     unit_cap = f"{unit_short} cap"
-    use_silver = pay_with.strip().lower() == "silver"
+
+    # 1. Read War sheet once for user row to check cap
+    # e.g. user has ARMY + TEMP_ARMY, or NAVY + TEMP_NAVY. We also read the *cap column.
+    user_id_str = str(member.id)
+    war_user_ids = war_sheet.col_values(SHEET_COLUMNS[USER_ID])
+    try:
+        row_index = war_user_ids.index(user_id_str) + 1
+    except ValueError:
+        return await ctx.send(f"Error: {member.display_name} not found in War sheet. Create or add them first.")
+
+    # row_values => entire row for user in war sheet
+    row_values = war_sheet.row_values(row_index)
+
+    unit_col  = SHEET_COLUMNS.get(unit_short)
+    temp_col  = SHEET_COLUMNS.get(f"Temp {unit_short}")
+    unit_cap_col = SHEET_COLUMNS.get(unit_cap)
+
+    # parse old
+    def safe_int_val(col_idx):
+        if not col_idx: 
+            return 0
+        if col_idx <= len(row_values):
+            val = row_values[col_idx - 1]
+            try:
+                return int(val)
+            except ValueError:
+                return 0
+        return 0
+
+    old_unit  = safe_int_val(unit_col)
+    old_temp = safe_int_val(temp_col)
+    old_unit_cap  = safe_int_val(unit_cap_col)
+
+    # we consider if user is deploying "Army" or "Temp Army" but typically we just check army+temp + count <= cap
+    # We'll do a simplified approach ignoring if it's Army or Temp Army specifically
+    # If the new total of (old_army + old_tarmy + count) > old_acap => fail
+    if (old_unit + count) > old_unit_cap:
+        return await ctx.send(
+            f"Deployment not possible. Current {unit_short}: {old_unit}+{old_temp}/{old_unit_cap} (Would go over cap)."
+        )
+
+    # 2. Parse cost
+    costs, invalid = parse_resource_list(cost)
+    if invalid:
+        return await ctx.send(f"Invalid resources: {invalid}. Aborting Deployment.")
 
 
-    current_troop = get_user_balance(member.id, unit_short)  
-    if current_troop is None:
-        return await ctx.send(f"An error occurred when fetching the current {unit_short} count of {member.display_name}.")
-    current_troop = int(current_troop)
-
-    current_temp = get_user_balance(member.id, f"Temp {unit_short}")  
-    if current_temp is None:
-        return await ctx.send(f"An error occurred when fetching the current Temp {unit_short} count of {member.display_name}.")
-    current_temp = int(current_temp)
-
-    current_cap = get_user_balance(member.id, unit_cap) 
-    if current_cap is None:
-        return await ctx.send(f"An error occurred when fetching the current {unit_cap} of {member.display_name}.")
-    current_cap = int(current_cap)
-
-    if current_troop + count > current_cap:
-        return await ctx.send(f"Deployment not possible. Current {unit_short}: {current_troop}+{current_temp}/{current_cap} (Would go over cap).")
-
-    costs = troop_costs(unit_short, int(count), use_silver)
-
-    # 5. Check if user can afford the costs
-    check = await check_debt(ctx, member, costs)
+    # 3. Check if user can afford the costs
+    check, summary = await check_debt(ctx, member, costs)
     if not check: return
 
-    # 6. Deduct resources and deploy the unit
-    for qty, resource in costs:
-
-        await add_log(ctx, member, -qty, get_unit(resource), f"Deploying {unit} on {date_of_arrival}")
-    
-    # 7. Deploy unit to unit sheet
+    # 4. Deduct resources and deploy the unit
+    cost_changes = [(-qty, resource) for (qty, resource) in costs]
+    cost_result = batch_add_all(
+        ctx=ctx,
+        member=member,
+        resource_list=cost_changes,
+        log_msg=f"Deployment of {unit} on {date_of_arrival}"
+    )
+    if not cost_result:
+        return await ctx.send("User not found. Aborting Deployment.")
+    # 5. Deploy unit to unit sheet
 
     construct_unit(member, date_of_arrival, count, unit, source)
 
-    # 8. Confirm deployment
+    # 6. Confirm deployment
     await ctx.send(
         f"{member.mention} has successfully deployed {count} **{unit}**. It will arrive on {date_of_arrival}\n"
     )
@@ -3479,17 +3906,25 @@ async def expand(ctx: commands.Context, member: discord.Member, tile_count: int,
     if invalid:
         return await ctx.send(f"Invalid resources: {invalid}. Aborting Expansion.")
 
-    check = await check_debt(ctx, member, costs)
+    check, summary = await check_debt(ctx, member, costs)
     if not check: return #await ctx.send(f"{member.display_name} does not have enough silver or resources for this expansion (Cost: {cost}).")
 
-    # Deduct resources
-    for qty, resource in costs:
+    # Deduct resources and increment the tile count
+    accumulated_changes = []
+    for (qty, resource_name) in costs:
+        accumulated_changes.append((-qty, get_unit(resource_name)))  # negative for deduction
 
-        await add_log(ctx, member, -qty, get_unit(resource), f"Expansion")
+    # Add the tile increment
+    accumulated_changes.append((int(tile_count), TILES))
 
-    
-    # Increment the tile count
-    await add_log(ctx, member, int(tile_count), TILES, f"Expansion")
+    # 2) Use batch_add_all in one go
+    batch_add_all(
+        ctx=ctx,
+        member=member,
+        resource_list=accumulated_changes,
+        log_msg="Expansion"
+    )
+
 
     await referenced_msg.add_reaction("✅")
     # Post the image and message in the expansion channel
@@ -3728,28 +4163,39 @@ async def manufacture(ctx: commands.Context, member: discord.Member, count: int,
         return await send(ctx, f"{basic_resource} is not a valid basic resource for manufacturing.", ephemeral=True)
 
     # Check if the user has enough industry and basic resources
-    costs = [(count, basic_resource), (count, INDUSTRY)]
+    costs = [(count, basic_resource), (count, INDUSTRY), (-count, advanced_resource)]
     
     member = get_member(member)
-    check = await check_debt(ctx, member, costs)
+    check, summary = await check_debt(ctx, member, costs)
     if not check: return
 
-    # Deduct the required resources
-    updated_industry =  await add_log(ctx, member, -count, INDUSTRY, verb)
-    updated_basic = await add_log(ctx, member, -count, basic_resource, verb)
+    
+    # Accumulate all resource changes in one list
+    changes = [
+        (-count, INDUSTRY), 
+        (-count, basic_resource),        
+        (count, advanced_resource)        
+    ]
 
-    # Add the advanced resources
-    updated_advanced = await add_log(ctx, member, count, advanced_resource, verb)
+    # Then call batch_add_all once
+    result = batch_add_all(
+        ctx=ctx,
+        member=member,
+        resource_list=changes,
+        log_msg=verb
+    )
+    if not result:
+        return await ctx.send("User not found. Aborting Manufacture.")
 
-
+    old_values, final_values = result
     # Send a confirmation message
     await send(ctx, (
         f"{member.display_name} has manufactured {count} {advanced_resource} using {count} {basic_resource} "
         f"and {count} {INDUSTRY} points.\n"
-        f"Updated balances:\n"
-        f"- {INDUSTRY}: {updated_industry}\n"
-        f"- {basic_resource}: {updated_basic}\n"
-        f"- {advanced_resource}: {updated_advanced}"
+        #f"Updated balances:\n"
+        #f"- {INDUSTRY}: {final_values.get(INDUSTRY, 'N/A')}\n"
+        #f"- {basic_resource}: {final_values.get(basic_resource, 'N/A')}\n"
+        #f"- {advanced_resource}: {final_values.get(advanced_resource, 'N/A')}"
     ))
 
 
@@ -3836,7 +4282,7 @@ async def union(ctx: commands.Context, leader: discord.Member, member_2: discord
         (war_sheet, {USER_ID, DISCORD_NAME, ARMY_DOCTRINE, NAVY_DOCTRINE}, {}),  # Summation for Army, Navy, Caps, Temp Army/Navy
         (resource_sheet, {USER_ID, DISCORD_NAME}, {}),            # Summation for all numeric columns
         (production_sheet, {USER_ID, DISCORD_NAME}, {}),          # Summation for production numeric columns
-        (buildings_sheet, {USER_ID, DISCORD_NAME}, {EMPORIUM, MONUMENT})  # Summation for buildings except Emporium, Monument => max
+        (buildings_sheet, {USER_ID, DISCORD_NAME}, {MONUMENT})  # Summation for buildings except Emporium, Monument => max
     ]
 
     # The function to retrieve an entire row's values as a dictionary: {col_name: str_value}
@@ -3951,6 +4397,7 @@ async def union(ctx: commands.Context, leader: discord.Member, member_2: discord
         f"Union successfully created! {leader.display_name} is the Union Leader.\nParticipants: {player_names}."
     )
 
+
 @bot.hybrid_command(name="loan", brief="Loans an Army or Navy from one player to the other, arriving in 2 weeks.")
 @app_commands.describe(
     receiver="The member receiving the loaned unit.",
@@ -4030,41 +4477,36 @@ async def loan(
     if int(current_troop) - count < 0:
         return await ctx.send(f"{sender.display_name} does not have enough {unit}s to loan (Only {current_troop}).")
 
-    #unit_cap = f"{unit} cap"
-
-
-    #current_troop = get_user_balance(receiver.id, unit)  
-    #if current_troop is None:
-    #    return await ctx.send(f"An error occurred when fetching the current {unit} count of {receiver.display_name}.")
-    #current_troop = int(current_troop)
-
-    #current_temp = get_user_balance(receiver.id, f"Temp {unit}")  
-    #if current_temp is None:
-    #    return await ctx.send(f"An error occurred when fetching the current Temp {unit} count of {receiver.display_name}.")
-    #current_temp = int(current_temp)
-
-    #current_cap = get_user_balance(receiver.id, unit_cap) 
-    #if current_cap is None:
-    #    return await ctx.send(f"An error occurred when fetching the current {unit_cap} of {receiver.display_name}.")
-    #current_cap = int(current_cap)
-
-    #if current_troop + current_temp + count > current_cap:
-      #  return await ctx.send(f"Deployment not possible. Current {unit}: {current_troop}+{current_temp}/{current_cap} (Would go over cap).")
-
     costs, invalid = parse_resource_list(compensation)
     if invalid:
         return await ctx.send(f"Invalid resources: {invalid}. Aborting Loaning.")
 
 
     # 5. Check if user can afford the costs
-    check = await check_debt(ctx, receiver, costs)
+    check, summary = await check_debt(ctx, receiver, costs)
     if not check: return
 
     # 6. Deduct resources and deploy the unit
-    for qty, resource in costs:
+    receiver_changes = [(-qty, unit_) for (qty, unit_) in costs]
+    r_result = batch_add_all(
+        ctx=ctx,
+        member=receiver,
+        resource_list=receiver_changes,
+        log_msg=f"Loaning {unit} from {sender.name} arriving {date_of_arrival}"
+    )
+    if not r_result:
+        return await ctx.send("Error deducting compensation from receiver. Aborting loan.")
 
-        await add_log(ctx, receiver, -qty, get_unit(resource), f"Loaning {unit} from {sender.name} arriving {date_of_arrival}")
-        await add_log(ctx, sender, qty, get_unit(resource), f"Loaning {unit} to {receiver.name} arriving {date_of_arrival}")
+    # positive for sender
+    sender_changes = [(qty, unit_) for (qty, unit_) in costs]
+    s_result = batch_add_all(
+        ctx=ctx,
+        member=sender,
+        resource_list=sender_changes,
+        log_msg=f"Loaning {unit} to {receiver.name} arriving {date_of_arrival}"
+    )
+    if not s_result:
+        return await ctx.send("Error adding compensation to sender. Loan only registered from on the receiver. Ask bot creator to intervene.")
 
     # 7. Deploy unit to unit sheet
     loan_unit(receiver, sender, date_of_arrival, date_of_return, count, unit, source)
@@ -4073,6 +4515,242 @@ async def loan(
     await ctx.send(
         f"{sender.mention} has successfully loaned {receiver.mention} {count} **{unit}**. It will arrive on {date_of_arrival} and be returned on {date_of_return}\n"
     )
+
+
+@bot.hybrid_command(name="energy_roll", brief="Spend Energy to gain random basic resources.")
+@app_commands.describe(
+    member="The user spending Energy.",
+    count="The amount of Energy to spend (must be positive)."
+)
+async def energy_roll(ctx: commands.Context, member: discord.Member, count: int):
+    """
+    Spends a specified number of Energy resources to gain random basic resources.
+
+    How it Works
+    -------------
+    - The command checks if the user has enough Energy to spend.
+    - For each Energy spent, the user receives 3 of a randomly chosen basic resource 
+      (e.g., Crops, Fuel, Metal, Timber, etc.).
+    - All resource changes (removing Energy, adding random resources) are performed 
+      in a single batch operation for minimal sheet interaction.
+    - A summary of final balances is displayed at the end.
+
+    Usage
+    -------------
+    !energy_roll @User 5
+      Spends 5 Energy. For each Energy, picks a random basic resource 
+      and grants +3 of that resource.
+
+    Parameters
+    -----------
+    member: discord.Member
+        The user spending the Energy.
+    count: int
+        The number of Energy to spend (must be positive).
+    """
+    if isinstance(ctx.interaction, Interaction) and not ctx.interaction.response.is_done():
+        await ctx.interaction.response.defer()
+
+    # Authorization check
+    if not is_authorized(ctx):
+        return await ctx.send("You do not have permission to perform energy rolls.")
+
+    # If negative or zero, stop
+    if count <= 0:
+        return await ctx.send("Energy used must be a positive number.")
+
+        # For each energy, randomly pick from advanced_resource_map.keys()
+    basic_resources = list(advanced_resource_map.keys())  
+
+    rolls = [(-3, random.choice(basic_resources)) for _ in range(count)]
+    # We then sum how many times each resource appears
+
+
+    # Check if user can pay that amount of ENERGY
+    # We'll treat it like a cost => user must have 'energy_used' ENERGY to spend
+    gained = group_costs(rolls)
+    cost_list = [(count, ENERGY)] + gained
+    check, summary = await check_debt(ctx, member, cost_list)
+    if not check:
+        return  # insufficient or canceled
+
+
+    # Build a single list of changes for batch_add_all
+    changes = [(-qty, resource) for (qty, resource) in cost_list]
+
+    # 5) Do a single batch_add_all
+    result = batch_add_all(
+        ctx=ctx,
+        member=member,
+        resource_list=changes,
+        log_msg="Energy Roll"
+    ) 
+    if not result:
+        return await ctx.send("User not found. Aborting energy rolls.")
+
+    await ctx.send(f"{member.display_name} has rolled {", ".join(f"{-qty} {unit}" for (qty, unit) in gained)} using {count} {ENERGY}.")
+
+
+
+@bot.hybrid_command(name="mass_add", brief="Adds a specified unit to multiple mentioned users in one go.")
+@app_commands.describe(
+    source="Optional source or reason for the changes (required).",
+    unit_str="The resource/unit type to add (e.g. Silver, XP).",
+    text='Text containing user mentions and amounts, e.g. "@User1 20 @User2 50".'
+)
+async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: str = ""):
+    """
+    Add a given unit to multiple mentioned users in one go, performing only
+    one read and one batch update on the sheet.
+
+    Usage
+    ------
+    !mass_add "Mod Pay" Silver @User1 20 @User2 50 @User3 10
+      => user1 gets +20 Silver, user2 gets +50, user3 gets +10
+
+    Parameters
+    ----------
+    source: str
+        The source or reason for the reason for the changes (required).
+    unit_str: str
+        The resource or unit type (e.g., 'Silver', 'XP', 'Crops').
+    text: str
+        The rest of the message containing user mentions + amounts, e.g. '@User1 20 @User2 50'.
+    """
+    if isinstance(ctx.interaction, Interaction) and not ctx.interaction.response.is_done():
+        await ctx.interaction.response.defer()
+
+    # Permission check
+    if not is_authorized(ctx):
+        return await ctx.send("You do not have permission to modify the sheet.")
+
+    # 1) Identify the sheet
+    unit = get_unit(unit_str)
+    if not unit:
+        return await ctx.send(f"Invalid unit type '{unit_str}'. Aborting.")
+    sheet = get_sheet(unit)
+    if not sheet:
+        return await ctx.send(f"Could not find a sheet for unit '{unit_str}'. Aborting.")
+
+    # 2) Build user->amount pairs from mentions + text
+    # We'll store them in a list: [(user_id, amount), ...]
+    user_amounts = []
+    message_text = text
+
+    # We assume ctx.message.mentions is in the order of mention
+    # We'll parse out the integer that follows each mention
+    tokens = message_text.split()
+    # tokens might be something like ["@User1", "20", "@User2", "50", ...]
+    mention_index = 0
+    for user in ctx.message.mentions:
+        user_id = user.id
+        # find the mention in tokens, get the next token as int
+        # We'll do a naive approach: search for the mention string with user ID 
+        # e.g. <@1234567890> or <@!1234567890>
+        possible_mentions = [f"<@{user_id}>", f"<@!{user_id}>"]
+        # We'll find which token index has that mention
+        qty = 0
+        for i in range(len(tokens)-1):
+            if tokens[i] in possible_mentions:
+                # parse next token as int
+                try:
+                    qty = int(tokens[i+1])
+                except ValueError:
+                    qty = 0
+                break
+        if qty == 0:
+            # no valid number found for this mention
+            # skip or default 0
+            await ctx.send(f"{user.display_name} not found in the mentions, skipping.")
+            pass
+        user_amounts.append((user_id, qty))
+
+    if not user_amounts:
+        return await ctx.send("No valid mention+amount pairs found. Aborting.")
+
+    # 3) In one read, gather the user ID column + the unit column
+    try:
+        user_ids = sheet.col_values(SHEET_COLUMNS[USER_ID])
+    except Exception as e:
+        return await ctx.send(f"Failed to read user column. Error: {e}")
+
+    try:
+        unit_values = sheet.col_values(SHEET_COLUMNS[unit])
+    except Exception as e:
+        return await ctx.send(f"Failed to read {unit_str} column. Error: {e}")
+
+    min_len = min(len(user_ids), len(unit_values))
+    user_map = {}
+    for i in range(1, min_len):  # skip i=0 if row #1 is a header
+        row_user = user_ids[i]
+        row_val  = unit_values[i]
+        actual_row = i + 1
+        user_map[row_user] = (actual_row, row_val)
+
+    # 4) Build new values in memory
+    new_values_dict = {}  # row_index -> new_val
+    log_rows = []
+    timestamp_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    editor_id = str(ctx.author.id)
+    editor_name = ctx.author.name
+    link = ctx.message.jump_url if ctx.message else ""
+
+    for (u_id, qty) in user_amounts:
+        user_id_str = str(u_id)
+        user = bot.get_user(u_id)
+        if user_id_str not in user_map:
+            # user not found in sheet
+            await ctx.send(f"{user}({u_id}) not found in the sheet, skipping.")
+            continue
+        row_idx, old_val_str = user_map[user_id_str]
+        try:
+            old_val_int = int(old_val_str)
+        except ValueError:
+            old_val_int = 0
+        new_val_int = old_val_int + qty
+        new_val_str = str(new_val_int)
+
+        new_values_dict[row_idx] = new_val_str
+
+        # log
+        log_rows.append([
+            user_id_str,
+            user.name,  
+            timestamp_str,
+            str(qty),
+            unit,
+            source,
+            editor_id,
+            editor_name,
+            new_val_str,
+            link
+        ])
+
+    # 5) Single batch update
+    requests = []
+    for row_idx, val_str in new_values_dict.items():
+        a1 = gspread.utils.rowcol_to_a1(row_idx, SHEET_COLUMNS[unit])
+        requests.append({
+            "range": a1,
+            "values": [[val_str]]
+        })
+
+    if requests:
+        try:
+            sheet.batch_update(requests, value_input_option="USER_ENTERED")
+        except Exception as e:
+            return await ctx.send(f"Failed to write updated values. Error: {e}")
+
+    # 6) Single log append
+    if log_rows:
+        try:
+            log_sheet.append_rows(log_rows, value_input_option="USER_ENTERED")
+        except Exception as e:
+            await ctx.send(f"Mass add updated, but logging failed. Error: {e}")
+
+    # 7) Confirm
+    await ctx.send(f"Mass added {unit} for {len(user_amounts)} users: {", ".join(f"{bot.get_user(u_id).display_name}: {qty}" for (u_id, qty) in user)}")
+
 
 
 bot.run(DISCORD_TOKEN)
