@@ -4654,6 +4654,8 @@ async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: 
             for i in range(0, len(tokens), 2)]
     except ValueError:
         return await ctx.send(f"Tokens could not be converted to integers, Aborting.")
+    except TypeError:
+        return await ctx.send(f"A type error occurred, Aborting.")
 
 
     if not user_amounts:
