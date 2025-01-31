@@ -3714,7 +3714,7 @@ async def arrival(ctx: commands.Context):
     member="The player to deploy the unit for.",
     count="The number of troops to deploy.",
     unit="The unit type (e.g., Army, Temp Army, Navy, Temp Navy).",
-    pay_with="The payment method ('Silver' or 'Resources').",
+    cost="A comma-separated list of the resources and amounts making up the cost of the deployment (e.g., '35 Silver, 1 Supplies').",
     date_of_arrival="The date when the deployment arrives (YYYY-MM-DD, defaults to 2 weeks from the current date).",
     source="The reason or source of the deployment (optional, defaults to 'Deployment.')."
 )
