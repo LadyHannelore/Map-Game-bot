@@ -819,6 +819,7 @@ async def check_debt(ctx: Context, member: discord.Member, costs: List[Tuple[int
     cost_summary_lines = []
     insufficient: List[unit_type] = []
 
+
     try:
         user_ids = next(iter(sheet_costs)).col_values(SHEET_COLUMNS[USER_ID])
         # find row
@@ -876,7 +877,7 @@ async def check_debt(ctx: Context, member: discord.Member, costs: List[Tuple[int
         embed.add_field(name="Cost Details", value=cost_message, inline=False)
         msg = await send(ctx, embed=embed)
 
-        if auto_cancel: return None
+        if auto_cancel: return None, ""
 
         # Add reaction emojis
         await msg.add_reaction("✅")
@@ -900,7 +901,7 @@ async def check_debt(ctx: Context, member: discord.Member, costs: List[Tuple[int
             return None, ""
         # If ✅, proceed with deduction
         else:
-            return True
+            return True, cost_message
     else:
         # No resources go negative, just show a confirmation
         await send(ctx, 
