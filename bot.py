@@ -4650,13 +4650,14 @@ async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: 
     
     pattern = re.compile(r"<@(\d+)>")
     try:
-        user_amounts = [(int(match.group(1)) if (match := pattern.match(str(tokens[i]))) else str(tokens[i]), int(tokens[i + 1])) 
+        user_amounts = [(match.group(1) if (match := pattern.match(str(tokens[i]))) else str(tokens[i]), int(tokens[i + 1])) 
             for i in range(0, len(tokens), 2)]
     except ValueError:
         return await ctx.send(f"Tokens could not be converted to integers, Aborting.")
     except TypeError:
         return await ctx.send(f"A type error occurred, Aborting.")
 
+    print(user_amounts)
 
     if not user_amounts:
         return await ctx.send("No valid mention+amount pairs found. Aborting.")
@@ -4666,19 +4667,25 @@ async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: 
         user_ids = sheet.col_values(SHEET_COLUMNS[USER_ID])
     except Exception as e:
         return await ctx.send(f"Failed to read user column. Error: {e}")
+    
+    print(user_ids)
 
     try:
         unit_values = sheet.col_values(SHEET_COLUMNS[unit])
     except Exception as e:
         return await ctx.send(f"Failed to read {unit_str} column. Error: {e}")
+    
+    print(unit_values)
 
     min_len = min(len(user_ids), len(unit_values))
     user_map = {}
     for i in range(1, min_len):  # skip i=0 if row #1 is a header
-        row_user = user_ids[i]
+        row_user = str(user_ids[i])
         row_val  = unit_values[i]
         actual_row = i + 1
         user_map[row_user] = (actual_row, row_val)
+
+    print(user_map)
 
     # 4) Build new values in memory
     new_values_dict = {}  # row_index -> new_val
@@ -4695,6 +4702,7 @@ async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: 
             # user not found in sheet
             await ctx.send(f"{user}({u_id}) not found in the sheet, skipping.")
             continue
+        print(user_map[user_id_str])
         row_idx, old_val_str = user_map[user_id_str]
         try:
             old_val_int = int(old_val_str)
