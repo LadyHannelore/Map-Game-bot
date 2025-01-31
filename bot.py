@@ -4641,8 +4641,10 @@ async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: 
     # We assume ctx.message.mentions is in the order of mention
     # We'll parse out the integer that follows each mention
     tokens = message_text.split()
+    print(tokens)
     # tokens might be something like ["@User1", "20", "@User2", "50", ...]
     mention_index = 0
+
     for user in ctx.message.mentions:
         user_id = user.id
         # find the mention in tokens, get the next token as int
