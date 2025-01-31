@@ -4657,7 +4657,7 @@ async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: 
     except TypeError:
         return await ctx.send(f"A type error occurred, Aborting.")
 
-    print(user_amounts)
+
 
     if not user_amounts:
         return await ctx.send("No valid mention+amount pairs found. Aborting.")
@@ -4668,14 +4668,14 @@ async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: 
     except Exception as e:
         return await ctx.send(f"Failed to read user column. Error: {e}")
     
-    print(user_ids)
+
 
     try:
         unit_values = sheet.col_values(SHEET_COLUMNS[unit])
     except Exception as e:
         return await ctx.send(f"Failed to read {unit_str} column. Error: {e}")
     
-    print(unit_values)
+
 
     min_len = min(len(user_ids), len(unit_values))
     user_map = {}
@@ -4685,7 +4685,7 @@ async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: 
         actual_row = i + 1
         user_map[row_user] = (actual_row, row_val)
 
-    print(user_map)
+
 
     # 4) Build new values in memory
     new_values_dict = {}  # row_index -> new_val
@@ -4702,7 +4702,7 @@ async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: 
             # user not found in sheet
             await ctx.send(f"{user}({u_id}) not found in the sheet, skipping.")
             continue
-        print(user_map[user_id_str])
+
         row_idx, old_val_str = user_map[user_id_str]
         try:
             old_val_int = int(old_val_str)
@@ -4715,6 +4715,7 @@ async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: 
 
         # log
         log_rows.append([
+
             user_id_str,
             user.name,  
             timestamp_str,
@@ -4750,7 +4751,7 @@ async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: 
             await ctx.send(f"Mass add updated, but logging failed. Error: {e}")
 
     # 7) Confirm
-    await ctx.send(f"Mass added {unit} for {len(user_amounts)} users: {", ".join(f"{bot.get_user(u_id).display_name}: {qty}" for (u_id, qty) in user)}")
+    await ctx.send(f"Mass added {unit} for {len(user_amounts)} users: {", ".join(f"{bot.get_user(int(u_id)).display_name}: {qty}" for (u_id, qty) in user_amounts)}")
 
 
 
