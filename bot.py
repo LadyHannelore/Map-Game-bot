@@ -4650,7 +4650,7 @@ async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: 
     
     pattern = re.compile(r"<@(\d+)>")
     try:
-        user_amounts = [(int(match.group(1)) if (match := pattern.match(tokens[i])) else tokens[i], int(tokens[i + 1])) 
+        user_amounts = [(int(match.group(1)) if (match := pattern.match(str(tokens[i]))) else str(tokens[i]), int(tokens[i + 1])) 
             for i in range(0, len(tokens), 2)]
     except ValueError:
         return await ctx.send(f"Tokens could not be converted to integers, Aborting.")
