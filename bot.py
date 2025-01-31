@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 import asyncio
 from gspread.exceptions import APIError
 import random
+import re
 
 # -------------- CONFIGURATION SECTION --------------
 load_dotenv()  # Load variables from .env
@@ -388,6 +389,8 @@ production_sheet = client.open_by_key(SHEET_KEY).worksheet(PRODUCTION_SHEET)
 buildings_sheet = client.open_by_key(SHEET_KEY).worksheet(BUILDINGS_SHEET)
 artefacts_sheet = client.open_by_key(SHEET_KEY).worksheet(ARTEFACTS_SHEET)
 log_sheet = client.open_by_key(SHEET_KEY).worksheet(LOG_SHEET)
+
+
 
 
 # -------------- DISCORD BOT SETUP --------------
@@ -4641,32 +4644,17 @@ async def mass_add(ctx: commands.Context, source: str,  unit_str: str, *, text: 
     # We assume ctx.message.mentions is in the order of mention
     # We'll parse out the integer that follows each mention
     tokens = message_text.split()
-    print(tokens)
     # tokens might be something like ["@User1", "20", "@User2", "50", ...]
-    mention_index = 0
+    if len(tokens) % 2 != 0:
+        raise ValueError("List of 'tokens' (users and their respective amounts) must be even.")
+    
+    pattern = re.compile(r"<@(\d+)>")
+    try:
+        user_amounts = [(int(match.group(1)) if (match := pattern.match(tokens[i])) else tokens[i], int(tokens[i + 1])) 
+            for i in range(0, len(tokens), 2)]
+    except ValueError:
+        return await ctx.send(f"Tokens could not be converted to integers, Aborting.")
 
-    for user in ctx.message.mentions:
-        user_id = user.id
-        # find the mention in tokens, get the next token as int
-        # We'll do a naive approach: search for the mention string with user ID 
-        # e.g. <@1234567890> or <@!1234567890>
-        possible_mentions = [f"<@{user_id}>", f"<@!{user_id}>"]
-        # We'll find which token index has that mention
-        qty = 0
-        for i in range(len(tokens)-1):
-            if tokens[i] in possible_mentions:
-                # parse next token as int
-                try:
-                    qty = int(tokens[i+1])
-                except ValueError:
-                    qty = 0
-                break
-        if qty == 0:
-            # no valid number found for this mention
-            # skip or default 0
-            await ctx.send(f"{user.display_name} not found in the mentions, skipping.")
-            pass
-        user_amounts.append((user_id, qty))
 
     if not user_amounts:
         return await ctx.send("No valid mention+amount pairs found. Aborting.")
