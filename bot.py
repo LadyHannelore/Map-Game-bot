@@ -12,7 +12,7 @@ from gspread.worksheet import Worksheet
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timezone, timedelta
 
-from typing import Literal, Union, List, get_args, Dict, Tuple, Optional, Any, Callable
+from typing import Literal, Union, List, get_args, Dict, Tuple, Optional, Any, Callable, Set
 from collections import Counter
 import sys, os
 import asyncio
@@ -3011,7 +3011,7 @@ async def respawn(ctx: commands.Context):
 
     # Set of Advances Resources
     advanced_list = [SUPPLIES, TOOLS, ENERGY, CEMENT]
-    advanced_set = set(advanced_list)
+    advanced_set = Set(advanced_list)
 
     # For each user, pick advanced leftover first, then basic leftover, up to city_limit
     # Gains 10 silver for each advanced leftover consumed, 5 silver for each basic leftover
