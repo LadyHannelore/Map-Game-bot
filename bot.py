@@ -3011,7 +3011,7 @@ async def respawn(ctx: commands.Context):
 
     # Set of Advances Resources
     advanced_list = [SUPPLIES, TOOLS, ENERGY, CEMENT]
-    advanced_set = Set(advanced_list)
+
 
     # For each user, pick advanced leftover first, then basic leftover, up to city_limit
     # Gains 10 silver for each advanced leftover consumed, 5 silver for each basic leftover
@@ -3033,7 +3033,7 @@ async def respawn(ctx: commands.Context):
                 continue
             if qty <= 0:
                 continue
-            if rname in advanced_set:
+            if rname in advanced_list:
                 advanced_portion.append((rname, qty))
             else:
                 basic_portion.append((rname, qty))
