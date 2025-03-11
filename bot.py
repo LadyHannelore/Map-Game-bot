@@ -4566,7 +4566,7 @@ async def energy_roll(ctx: commands.Context, member: discord.Member, count: int)
         # For each energy, randomly pick from advanced_resource_map.keys()
     basic_resources = list(advanced_resource_map.keys())  
 
-    rolls = [(-3, random.choice(basic_resources)) for _ in range(count)]
+    rolls = [(-2, random.choice(basic_resources)) for _ in range(count)]
     # We then sum how many times each resource appears
 
 
